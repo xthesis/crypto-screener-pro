@@ -1,179 +1,220 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 
-export default function Screener() {
-  const [coins, setCoins] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+interface Coin {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string;
+  current_price: number;
+  market_cap: number;
+  market_cap_rank: number;
+  total_volume: number;
+  price_change_percentage_24h: number;
+  price_change_percentage_7d: number;
+  price_change_percentage_30d: number;
+  rsi_14?: number;
+  volume_ratio?: number;
+}
 
-  useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      setCoins([
-        { rank: 1, symbol: 'BTC', name: 'Bitcoin', price: 42150.23, change24h: 2.34, volume: 28500000000, marketCap: 825000000000, rsi: 58.5 },
-        { rank: 2, symbol: 'ETH', name: 'Ethereum', price: 2245.67, change24h: 1.82, volume: 15200000000, marketCap: 270000000000, rsi: 62.1 },
-        { rank: 3, symbol: 'BNB', name: 'BNB', price: 305.42, change24h: -0.51, volume: 1200000000, marketCap: 47000000000, rsi: 45.2 },
-        { rank: 4, symbol: 'SOL', name: 'Solana', price: 98.15, change24h: 5.23, volume: 2800000000, marketCap: 43000000000, rsi: 71.3 },
-        { rank: 5, symbol: 'XRP', name: 'XRP', price: 0.5234, change24h: -1.23, volume: 1500000000, marketCap: 28000000000, rsi: 42.8 },
-        { rank: 6, symbol: 'ADA', name: 'Cardano', price: 0.4812, change24h: 3.15, volume: 580000000, marketCap: 17000000000, rsi: 55.9 },
-        { rank: 7, symbol: 'AVAX', name: 'Avalanche', price: 36.24, change24h: 4.52, volume: 420000000, marketCap: 13000000000, rsi: 68.2 },
-        { rank: 8, symbol: 'DOGE', name: 'Dogecoin', price: 0.0812, change24h: 1.12, volume: 890000000, marketCap: 11000000000, rsi: 51.4 },
-        { rank: 9, symbol: 'DOT', name: 'Polkadot', price: 7.23, change24h: -2.34, volume: 320000000, marketCap: 9500000000, rsi: 38.7 },
-        { rank: 10, symbol: 'MATIC', name: 'Polygon', price: 0.8534, change24h: 2.91, volume: 450000000, marketCap: 8200000000, rsi: 59.3 },
-      ]);
+function formatPrice(value: number): string {
+  if (value >= 1000) return '$'+value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (value >= 1) return '$'+value.toFixed(2);
+  if (value >= 0.01) return '$'+value.toFixed(4);
+  return '$'+value.toFixed(8);
+}
+
+function formatLarge(value: number): string {
+  if (value >= 1e12) return '$'+(value / 1e12).toFixed(2)+'T';
+  if (value >= 1e9) return '$'+(value / 1e9).toFixed(2)+'B';
+  if (value >= 1e6) return '$'+(value / 1e6).toFixed(2)+'M';
+  if (value >= 1e3) return '$'+(value / 1e3).toFixed(2)+'K';
+  return '$'+value.toFixed(2);
+}
+
+export default function Screener() {
+  const [coins, setCoins] = useState<Coin[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [marketCapFilter, setMarketCapFilter] = useState('all');
+  const [rsiFilter, setRsiFilter] = useState('all');
+  const [sortField, setSortField] = useState<string>('market_cap_rank');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const fetchCoins = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/coins');
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to fetch');
+      }
+      const data = await res.json();
+      setCoins(data);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   }, []);
 
-  const formatPrice = (price) => {
-    if (price >= 1000) return `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    if (price >= 1) return `$${price.toFixed(2)}`;
-    if (price >= 0.01) return `$${price.toFixed(4)}`;
-    return `$${price.toFixed(8)}`;
+  useEffect(() => {
+    fetchCoins();
+  }, [fetchCoins]);
+
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir(field === 'market_cap_rank' ? 'asc' : 'desc');
+    }
   };
 
-  const formatLargeNumber = (num) => {
-    if (num >= 1e12) return `$${(num / 1e12).toFixed(2)}T`;
-    if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
-    if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
-    return `$${num.toLocaleString()}`;
+  const SortIcon = ({ field }: { field: string }) => {
+    if (sortField !== field) return <span style={{ opacity: 0.3 }}>↕</span>;
+    return <span>{sortDir === 'asc' ? '↑' : '↓'}</span>;
   };
 
-  const filteredCoins = coins.filter(coin =>
-    coin.symbol.toLowerCase().includes(search.toLowerCase()) ||
-    coin.name.toLowerCase().includes(search.toLowerCase())
-  );
+  let filtered = coins.filter(c => {
+    const matchesSearch = !search ||
+      c.symbol.toLowerCase().includes(search.toLowerCase()) ||
+      c.name.toLowerCase().includes(search.toLowerCase());
+    let matchesMcap = true;
+    if (marketCapFilter === 'large') matchesMcap = c.market_cap >= 1e10;
+    else if (marketCapFilter === 'mid') matchesMcap = c.market_cap >= 1e9 && c.market_cap < 1e10;
+    else if (marketCapFilter === 'small') matchesMcap = c.market_cap < 1e9;
+    let matchesRsi = true;
+    const rsi = c.rsi_14 ?? 50;
+    if (rsiFilter === 'oversold') matchesRsi = rsi < 30;
+    else if (rsiFilter === 'neutral') matchesRsi = rsi >= 30 && rsi <= 70;
+    else if (rsiFilter === 'overbought') matchesRsi = rsi > 70;
+    return matchesSearch && matchesMcap && matchesRsi;
+  });
+
+  filtered.sort((a, b) => {
+    let valA: number, valB: number;
+    switch (sortField) {
+      case 'current_price': valA = a.current_price; valB = b.current_price; break;
+      case 'price_change_percentage_24h': valA = a.price_change_percentage_24h; valB = b.price_change_percentage_24h; break;
+      case 'total_volume': valA = a.total_volume; valB = b.total_volume; break;
+      case 'market_cap': valA = a.market_cap; valB = b.market_cap; break;
+      case 'rsi_14': valA = a.rsi_14 ?? 50; valB = b.rsi_14 ?? 50; break;
+      default: valA = a.market_cap_rank; valB = b.market_cap_rank;
+    }
+    return sortDir === 'asc' ? valA - valB : valB - valA;
+  });
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
-      <header className="border-b border-gray-800 bg-background-secondary">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <Link href="/" className="text-2xl font-bold gradient-text">
-              Crypto Screener Pro
-            </Link>
-            <nav className="flex items-center gap-6">
-              <Link href="/dashboard" className="text-gray-400 hover:text-white transition">
-                Dashboard
-              </Link>
-              <Link href="/screener" className="text-primary font-semibold">
-                Screener
-              </Link>
-              <Link href="/settings" className="text-gray-400 hover:text-white transition">
-                Settings
-              </Link>
-            </nav>
-          </div>
+      <header className="border-b border-gray-800" style={{ background: '#1A1A1D' }}>
+        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+          <Link href="/" className="text-2xl font-bold gradient-text">Crypto Screener Pro</Link>
+          <nav className="flex gap-6">
+            <Link href="/dashboard" className="text-gray-400 hover:text-white transition">Dashboard</Link>
+            <Link href="/screener" className="text-white font-semibold">Screener</Link>
+            <Link href="/formula/new" className="text-gray-400 hover:text-white transition">Formula Builder</Link>
+          </nav>
         </div>
       </header>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <h1 className="text-4xl font-bold mb-2">Crypto Screener</h1>
-        <p className="text-gray-400 mb-8">Screen top 300 cryptocurrencies with real-time data</p>
-
-        {/* Filters */}
-        <div className="card p-6 mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <input
-              type="text"
-              placeholder="Search coins..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full"
-            />
-            <select className="w-full">
-              <option>All Market Caps</option>
-              <option>Large Cap (&gt;$10B)</option>
-              <option>Mid Cap ($1B-$10B)</option>
-              <option>Small Cap (&lt;$1B)</option>
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-3xl font-bold">Live Crypto Screener</h1>
+          <button onClick={fetchCoins} className="btn btn-secondary text-sm" disabled={loading}>
+            {loading ? 'Refreshing...' : '↻ Refresh'}
+          </button>
+        </div>
+        <p className="text-gray-400 mb-6">
+          {loading ? 'Fetching live data...' : `Showing ${filtered.length} of ${coins.length} coins · Last updated just now`}
+        </p>
+        {error && (
+          <div className="card p-4 mb-6" style={{ background: '#3b1c1c', border: '1px solid #ef4444' }}>
+            <p className="text-red-400">{error}</p>
+            <button onClick={fetchCoins} className="btn btn-secondary text-sm mt-2">Retry</button>
+          </div>
+        )}
+        <div className="card p-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input type="text" placeholder="Search coins..." value={search} onChange={e => setSearch(e.target.value)} className="w-full" />
+            <select value={marketCapFilter} onChange={e => setMarketCapFilter(e.target.value)} className="w-full">
+              <option value="all">All Market Caps</option>
+              <option value="large">Large Cap (&gt;$10B)</option>
+              <option value="mid">Mid Cap ($1B-$10B)</option>
+              <option value="small">Small Cap (&lt;$1B)</option>
             </select>
-            <select className="w-full">
-              <option>All RSI</option>
-              <option>Oversold (&lt;30)</option>
-              <option>Neutral (30-70)</option>
-              <option>Overbought (&gt;70)</option>
+            <select value={rsiFilter} onChange={e => setRsiFilter(e.target.value)} className="w-full">
+              <option value="all">All RSI</option>
+              <option value="oversold">Oversold (&lt;30)</option>
+              <option value="neutral">Neutral (30-70)</option>
+              <option value="overbought">Overbought (&gt;70)</option>
             </select>
-            <select className="w-full">
-              <option>24 Hours</option>
-              <option>7 Days</option>
-              <option>30 Days</option>
-              <option>1 Year</option>
-            </select>
-            <button className="btn btn-primary w-full">
-              Apply Filters
-            </button>
+            <Link href="/formula/new" className="btn btn-primary text-center">Build Custom Formula</Link>
           </div>
         </div>
-
-        {/* Coin Table */}
         <div className="card overflow-hidden">
           {loading ? (
-            <div className="p-12 text-center">
-              <div className="loading h-8 w-full mb-4 rounded"></div>
-              <div className="loading h-8 w-full mb-4 rounded"></div>
-              <div className="loading h-8 w-full rounded"></div>
+            <div className="p-8 space-y-3">
+              {[...Array(8)].map((_, i) => (
+                <div key={i} className="h-12 w-full rounded" style={{ background: 'linear-gradient(90deg, #26262a 25%, #333 50%, #26262a 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' }}></div>
+              ))}
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="table">
+              <table className="table w-full">
                 <thead>
                   <tr>
                     <th className="text-left">#</th>
                     <th className="text-left">Coin</th>
-                    <th className="text-right">Price</th>
-                    <th className="text-right">24h %</th>
-                    <th className="text-right">Volume (24h)</th>
-                    <th className="text-right">Market Cap</th>
-                    <th className="text-right">RSI (14)</th>
-                    <th className="text-right">Actions</th>
+                    <th className="text-right cursor-pointer" onClick={() => handleSort('current_price')}>Price <SortIcon field="current_price" /></th>
+                    <th className="text-right cursor-pointer" onClick={() => handleSort('price_change_percentage_24h')}>24h % <SortIcon field="price_change_percentage_24h" /></th>
+                    <th className="text-right cursor-pointer" onClick={() => handleSort('total_volume')}>Volume <SortIcon field="total_volume" /></th>
+                    <th className="text-right cursor-pointer" onClick={() => handleSort('market_cap')}>Mkt Cap <SortIcon field="market_cap" /></th>
+                    <th className="text-right cursor-pointer" onClick={() => handleSort('rsi_14')}>RSI <SortIcon field="rsi_14" /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredCoins.map((coin) => (
-                    <tr key={coin.symbol} className="hover:bg-background-tertiary transition">
-                      <td className="text-gray-400 font-mono">{coin.rank}</td>
-                      <td>
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-sm font-bold">
-                            {coin.symbol[0]}
+                  {filtered.map((coin) => {
+                    const rsi = coin.rsi_14 ?? 50;
+                    const change = coin.price_change_percentage_24h;
+                    return (
+                      <tr key={coin.id}>
+                        <td className="text-gray-500 font-mono text-sm">{coin.market_cap_rank}</td>
+                        <td>
+                          <div className="flex items-center gap-3">
+                            {coin.image ? (
+                              <img src={coin.image} alt={coin.name} width={28} height={28} className="rounded-full" />
+                            ) : (
+                              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: '#667eea33' }}>{coin.symbol[0]}</div>
+                            )}
+                            <div>
+                              <div className="font-semibold text-sm">{coin.symbol}</div>
+                              <div className="text-xs text-gray-500">{coin.name}</div>
+                            </div>
                           </div>
-                          <div>
-                            <div className="font-semibold">{coin.symbol}</div>
-                            <div className="text-sm text-gray-400">{coin.name}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="text-right font-mono">{formatPrice(coin.price)}</td>
-                      <td className={`text-right font-mono font-semibold ${coin.change24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                        {coin.change24h >= 0 ? '+' : ''}{coin.change24h.toFixed(2)}%
-                      </td>
-                      <td className="text-right font-mono text-gray-400">{formatLargeNumber(coin.volume)}</td>
-                      <td className="text-right font-mono">{formatLargeNumber(coin.marketCap)}</td>
-                      <td className={`text-right font-mono font-semibold ${
-                        coin.rsi > 70 ? 'text-red-500' : 
-                        coin.rsi < 30 ? 'text-green-500' : 
-                        'text-gray-400'
-                      }`}>
-                        {coin.rsi.toFixed(1)}
-                      </td>
-                      <td className="text-right">
-                        <button className="btn btn-secondary text-sm py-1 px-3">
-                          Chart
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="text-right font-mono text-sm">{formatPrice(coin.current_price)}</td>
+                        <td className={`text-right font-mono text-sm font-semibold ${change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {change >= 0 ? '+' : ''}{change.toFixed(2)}%
+                        </td>
+                        <td className="text-right font-mono text-sm text-gray-400">{formatLarge(coin.total_volume)}</td>
+                        <td className="text-right font-mono text-sm">{formatLarge(coin.market_cap)}</td>
+                        <td className={`text-right font-mono text-sm font-semibold ${rsi > 70 ? 'text-red-500' : rsi < 30 ? 'text-green-500' : 'text-gray-400'}`}>
+                          {rsi.toFixed(1)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filtered.length === 0 && !loading && (
+                    <tr><td colSpan={7} className="text-center text-gray-500 py-8">No coins match your filters</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
           )}
-        </div>
-
-        <div className="text-center text-gray-400 mt-6 text-sm">
-          Showing {filteredCoins.length} of 300 coins • Updated every 60 seconds
         </div>
       </div>
     </div>
