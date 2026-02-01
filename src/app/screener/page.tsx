@@ -49,8 +49,10 @@ export default function Screener() {
     setError(null);
     try {
       const res = await fetch(bust ? '/api/coins?bust=1' : '/api/coins');
+      console.log('[FETCH]', { bust, serverTime: res.headers.get('X-Server-Time'), cacheBusted: res.headers.get('X-Cache-Busted') });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
       const data = await res.json();
+      console.log('[DATA]', { count: data.length, btcPrice: data.find((c: any) => c.symbol === 'BTC')?.current_price });
       setCoins(data);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e: any) { setError(e.message); }

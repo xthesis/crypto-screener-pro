@@ -10,7 +10,13 @@ export async function GET(req: Request) {
     const bust = url.searchParams.has('bust');
     const coins = await fetchTop300Coins(bust);
     const coinsWithIndicators = coins.map(coin => addEstimatedIndicators(coin));
-    return NextResponse.json(coinsWithIndicators);
+    // Wrap in object with server metadata for debugging
+    return NextResponse.json(coinsWithIndicators, {
+      headers: {
+        'X-Cache-Busted': String(bust),
+        'X-Server-Time': new Date().toISOString(),
+      }
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Failed to fetch coins' }, { status: 500 });
   }
