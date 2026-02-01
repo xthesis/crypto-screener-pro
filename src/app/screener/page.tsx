@@ -45,8 +45,11 @@ export default function Screener() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [lastUpdated, setLastUpdated] = useState('');
 
+  const [refreshing, setRefreshing] = useState(false);
+
   const fetchCoins = useCallback(async (bust = false) => {
     setError(null);
+    if (bust) setRefreshing(true);
     try {
       const res = await fetch(bust ? '/api/coins?bust=1' : '/api/coins');
       console.log('[FETCH]', { bust, serverTime: res.headers.get('X-Server-Time'), cacheBusted: res.headers.get('X-Cache-Busted') });
@@ -56,7 +59,7 @@ export default function Screener() {
       setCoins(data);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e: any) { setError(e.message); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setRefreshing(false); }
   }, []);
 
   useEffect(() => {
@@ -136,8 +139,8 @@ export default function Screener() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <button onClick={() => fetchCoins(true)} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }} disabled={loading}>
-              {loading ? '…' : '↻'}
+            <button onClick={() => fetchCoins(true)} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }} disabled={refreshing}>
+              {refreshing ? '…' : '↻'}
             </button>
             <Link href="/formula/new" className="btn btn-primary" style={{ fontSize: '0.7rem', padding: '0.35rem 0.75rem' }}>
               Build Formula →

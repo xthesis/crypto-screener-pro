@@ -10,9 +10,10 @@ export async function GET(req: Request) {
     const bust = url.searchParams.has('bust');
     const coins = await fetchTop300Coins(bust);
     const coinsWithIndicators = coins.map(coin => addEstimatedIndicators(coin));
-    // Wrap in object with server metadata for debugging
     return NextResponse.json(coinsWithIndicators, {
       headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
         'X-Cache-Busted': String(bust),
         'X-Server-Time': new Date().toISOString(),
       }
