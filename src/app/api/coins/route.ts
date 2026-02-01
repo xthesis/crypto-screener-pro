@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { fetchTop300Coins } from '@/lib/coinData';
 import { addEstimatedIndicators } from '@/lib/indicators';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const coins = await fetchTop300Coins();
