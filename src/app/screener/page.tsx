@@ -55,6 +55,7 @@ export default function Screener() {
       }
       const data = await res.json();
       setCoins(data);
+      setLastUpdated(new Date().toLocaleTimeString());
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -63,7 +64,12 @@ export default function Screener() {
   }, []);
 
   useEffect(() => {
+    // auto-refresh
     fetchCoins();
+    const interval = setInterval(fetchCoins, 30000);
+    return () => clearInterval(interval);
+    const interval = setInterval(fetchCoins, 30000);
+    return () => clearInterval(interval);
   }, [fetchCoins]);
 
   const handleSort = (field: string) => {
@@ -129,7 +135,7 @@ export default function Screener() {
           </button>
         </div>
         <p className="text-gray-400 mb-6">
-          {loading ? 'Fetching live data...' : `Showing ${filtered.length} of ${coins.length} coins · Last updated just now`}
+          {loading ? 'Fetching live data...' : `Showing ${filtered.length} of ${coins.length} coins · Updated ' + lastUpdated + ' · Auto-refreshes every 30s`}
         </p>
         {error && (
           <div className="card p-4 mb-6" style={{ background: '#3b1c1c', border: '1px solid #ef4444' }}>

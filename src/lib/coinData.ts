@@ -5,7 +5,7 @@ import { Coin, OHLCV } from '@/types';
 // Cache for coin data (15 minutes TTL)
 const coinCache = new Map<string, { data: Coin[]; timestamp: number }>();
 const ohlcvCache = new Map<string, { data: OHLCV[]; timestamp: number }>();
-const CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+const CACHE_TTL = 30 * 1000; // 30 seconds
 
 // ============================================
 // FETCH TOP 300 COINS FROM COINGECKO
