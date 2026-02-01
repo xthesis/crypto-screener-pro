@@ -2,199 +2,53 @@ import Link from 'next/link';
 
 export default function Home() {
   return (
-    <div className="min-h-screen">
-      {/* Hero Section */}
-      <div className="relative overflow-hidden">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
-          <div className="text-center">
-            <h1 className="text-6xl font-bold mb-6">
-              <span className="gradient-text">Crypto Screener Pro</span>
-            </h1>
-            <p className="text-xl text-gray-400 mb-8 max-w-2xl mx-auto">
-              Build custom formulas, screen 300+ cryptocurrencies, and get instant Telegram alerts when opportunities arise.
-            </p>
-            
-            <div className="flex gap-4 justify-center mb-12">
-              <Link href="/dashboard" className="btn btn-primary text-lg">
-                Get Started Free →
-              </Link>
-              <Link href="/screener" className="btn btn-secondary text-lg">
-                View Screener
-              </Link>
-            </div>
-
-            {/* Status Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto mt-16">
-              <div className="card p-6">
-                <div className="text-3xl mb-2">🗄️</div>
-                <h3 className="font-semibold mb-2">Database</h3>
-                <p className="text-green-500 font-mono">✅ Connected</p>
-              </div>
-              
-              <div className="card p-6">
-                <div className="text-3xl mb-2">🔌</div>
-                <h3 className="font-semibold mb-2">APIs</h3>
-                <p className="text-green-500 font-mono">✅ Ready</p>
-              </div>
-              
-              <div className="card p-6">
-                <div className="text-3xl mb-2">📊</div>
-                <h3 className="font-semibold mb-2">Data</h3>
-                <p className="text-green-500 font-mono">✅ Real-time</p>
-              </div>
-            </div>
+    <div style={{ minHeight: '100vh' }}>
+      <nav className="nav-shell">
+        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 1.5rem', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Link href="/" className="logo">Screener Pro</Link>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <Link href="/dashboard">Dashboard</Link>
+            <Link href="/screener">Screener</Link>
+            <Link href="/formula/new">Formula Builder</Link>
+          </div>
+        </div>
+      </nav>
+      <div style={{ padding: '7rem 1.5rem 5rem', textAlign: 'center', position: 'relative' }}>
+        <div style={{ position: 'absolute', top: '10%', left: '50%', transform: 'translateX(-50%)', width: 600, height: 400, background: 'radial-gradient(ellipse, rgba(79,140,255,0.08) 0%, transparent 70%)', pointerEvents: 'none', filter: 'blur(40px)' }}></div>
+        <div style={{ position: 'relative', zIndex: 1, maxWidth: 680, margin: '0 auto' }}>
+          <span style={{ display: 'inline-block', background: 'rgba(79,140,255,0.1)', color: '#4f8cff', fontSize: '0.7rem', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '0.35rem 0.85rem', borderRadius: 20, border: '1px solid rgba(79,140,255,0.2)', marginBottom: '1.75rem' }}>
+            Live · 300+ Coins · Auto-refresh
+          </span>
+          <h1 style={{ fontSize: 'clamp(2.5rem, 5vw, 3.75rem)', fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.03em', color: '#f0f2f5', marginBottom: '1.25rem' }}>
+            Screen crypto<br /><span style={{ color: '#4f8cff' }}>the smart way</span>
+          </h1>
+          <p style={{ fontSize: '1.0625rem', color: '#8b9099', lineHeight: 1.7, maxWidth: 520, margin: '0 auto 2.25rem' }}>
+            Build custom screening formulas, run them against 300 live coins, and catch opportunities as they happen. No guesswork.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <Link href="/screener" className="btn btn-primary" style={{ padding: '0.7rem 1.5rem', fontSize: '0.875rem' }}>Open Screener →</Link>
+            <Link href="/formula/new" className="btn btn-ghost" style={{ padding: '0.7rem 1.5rem', fontSize: '0.875rem' }}>Build a Formula</Link>
           </div>
         </div>
       </div>
-
-      {/* Features Section */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
-        <h2 className="text-4xl font-bold text-center mb-16">
-          Everything You Need
-        </h2>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          <div className="card p-8">
-            <div className="text-4xl mb-4">🎯</div>
-            <h3 className="text-xl font-semibold mb-3">Custom Formulas</h3>
-            <p className="text-gray-400">
-              Build any screening formula with 20+ technical indicators. No coding required.
-            </p>
-          </div>
-          
-          <div className="card p-8">
-            <div className="text-4xl mb-4">📱</div>
-            <h3 className="text-xl font-semibold mb-3">Telegram Alerts</h3>
-            <p className="text-gray-400">
-              Get instant notifications when coins match your formulas. Never miss an opportunity.
-            </p>
-          </div>
-          
-          <div className="card p-8">
-            <div className="text-4xl mb-4">📊</div>
-            <h3 className="text-xl font-semibold mb-3">300+ Coins</h3>
-            <p className="text-gray-400">
-              Screen top cryptocurrencies by market cap with real-time price data.
-            </p>
-          </div>
-          
-          <div className="card p-8">
-            <div className="text-4xl mb-4">💹</div>
-            <h3 className="text-xl font-semibold mb-3">TradingView Charts</h3>
-            <p className="text-gray-400">
-              Professional charts with multiple timeframes and indicator overlays.
-            </p>
-          </div>
-          
-          <div className="card p-8">
-            <div className="text-4xl mb-4">📈</div>
-            <h3 className="text-xl font-semibold mb-3">Performance Tracking</h3>
-            <p className="text-gray-400">
-              See how your formulas perform over time with detailed analytics.
-            </p>
-          </div>
-          
-          <div className="card p-8">
-            <div className="text-4xl mb-4">⚡</div>
-            <h3 className="text-xl font-semibold mb-3">Real-time Data</h3>
-            <p className="text-gray-400">
-              Live cryptocurrency prices from CoinGecko and Binance APIs.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Pricing Section */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
-        <h2 className="text-4xl font-bold text-center mb-16">
-          Simple Pricing
-        </h2>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-          <div className="card p-8">
-            <h3 className="text-2xl font-bold mb-4">Free</h3>
-            <div className="text-4xl font-bold mb-6">$0<span className="text-lg text-gray-400">/mo</span></div>
-            <ul className="space-y-3 mb-8">
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                5 custom formulas
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                10 alerts per day
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                Top 300 coins
-              </li>
-            </ul>
-            <Link href="/dashboard" className="btn btn-secondary w-full block text-center">
-              Get Started
-            </Link>
-          </div>
-          
-          <div className="card p-8 border-2 border-primary relative">
-            <div className="absolute top-0 right-0 bg-primary text-white px-3 py-1 text-sm font-semibold rounded-bl-lg">
-              Popular
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 1.5rem 5rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+          {[
+            { icon: '⚡', title: 'Live Data', desc: 'Prices refresh every 30 seconds from CoinGecko.' },
+            { icon: '🎯', title: 'Custom Formulas', desc: 'Combine RSI, volume, price change into any rule.' },
+            { icon: '📊', title: '300+ Coins', desc: 'Screen by market cap, technicals, and momentum.' },
+            { icon: '🔔', title: 'Alerts (soon)', desc: 'Get notified when coins match your criteria.' },
+          ].map(f => (
+            <div key={f.title} className="card" style={{ padding: '1.5rem' }}>
+              <div style={{ fontSize: '1.375rem', marginBottom: '0.6rem' }}>{f.icon}</div>
+              <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#f0f2f5', marginBottom: '0.35rem' }}>{f.title}</div>
+              <div style={{ fontSize: '0.75rem', color: '#8b9099', lineHeight: 1.5 }}>{f.desc}</div>
             </div>
-            <h3 className="text-2xl font-bold mb-4">Pro</h3>
-            <div className="text-4xl font-bold mb-6">$29<span className="text-lg text-gray-400">/mo</span></div>
-            <ul className="space-y-3 mb-8">
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                Unlimited formulas
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                100 alerts per day
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                Real-time alerts
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                Priority support
-              </li>
-            </ul>
-            <Link href="/dashboard" className="btn btn-primary w-full block text-center">
-              Start Free Trial
-            </Link>
-          </div>
-          
-          <div className="card p-8">
-            <h3 className="text-2xl font-bold mb-4">Team</h3>
-            <div className="text-4xl font-bold mb-6">$99<span className="text-lg text-gray-400">/mo</span></div>
-            <ul className="space-y-3 mb-8">
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                Everything in Pro
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                Unlimited alerts
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                API access
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span>
-                Dedicated support
-              </li>
-            </ul>
-            <Link href="/dashboard" className="btn btn-secondary w-full block text-center">
-              Contact Sales
-            </Link>
-          </div>
+          ))}
         </div>
       </div>
-
-      {/* Footer */}
-      <footer className="border-t border-gray-800 py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-400">
-          <p>© 2026 Crypto Screener Pro. Built for traders, by traders.</p>
-        </div>
+      <footer style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '1.75rem 1.5rem', textAlign: 'center' }}>
+        <p style={{ fontSize: '0.75rem', color: '#545b66' }}>© 2026 Crypto Screener Pro · Built for traders</p>
       </footer>
     </div>
   );

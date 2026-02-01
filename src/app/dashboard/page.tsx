@@ -14,16 +14,14 @@ interface Coin {
   total_volume: number;
   price_change_percentage_24h: number;
   rsi_14?: number;
-  volume_ratio?: number;
+  volume_ratio>: number;
 }
 
 const SAVED_FORMULAS = [
-  { id: '1', name: 'Oversold Bounce', description: 'RSI below 30', conditions: [{ id: 1, field: 'rsi_14', operator: 'less_than', value: '30', logicalOperator: 'AND' }] },
-  { id: '2', name: 'Top Gainers', description: '24h Change above 5 percent', conditions: [{ id: 1, field: 'change_24h', operator: 'greater_than', value: '5', logicalOperator: 'AND' }] },
-  { id: '3', name: 'High Volume Surge', description: 'Volume Ratio above 1.5', conditions: [{ id: 1, field: 'volume_ratio', operator: 'greater_than', value: '1.5', logicalOperator: 'AND' }] },
+  { id: '1', name: 'Oversold Bounce', description: 'RSI < 30', conditions: [{ id: 1, field: 'rsi_14', operator: 'less_than', value: '30', logicalOperator: 'AND' }] },
+  { id: '2', name: 'Top Gainers', description: '24h change > 5%', conditions: [{ id: 1, field: 'change_24h', operator: 'greater_than', value: '5', logicalOperator: 'AND' }] },
+  { id: '3', name: 'Volume Surge', description: 'Volume ratio > 1.5', conditions: [{ id: 1, field: 'volume_ratio', operator: 'greater_than', value: '1.5', logicalOperator: 'AND' }] },
 ];
-
-const sStyle: React.CSSProperties = { background: 'linear-gradient(90deg, #26262a 25%, #333 50%, #26262a 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' };
 
 export default function Dashboard() {
   const [coins, setCoins] = useState<Coin[]>([]);
@@ -41,106 +39,21 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 3);
-  const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 3);
-  const oversoldCount = coins.filter(c => (c.rsi_14 ?? 50) < 30).length;
-  const overboughtCount = coins.filter(c => (c.rsi_14 ?? 50) > 70).length;
-  const oversoldCoins = coins.filter(c => (c.rsi_14 ?? 50) < 30).slice(0, 3);
+  const topGainers = [...coins].sort((a, b) ?> b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 4);
+  const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 4);
+  const oversoldCoins = coins.filter(c ?> (c.rsi_14 ?? 50) < 30).slice(0, 4);
+  const oversoldCount = coins.filter(c ?> (c.rsi_14 ?? 50) < 30).length;
+  const overboughtCount = coins.filter(c ?> (c.rsi_14 ?? 50) > 70).length;
 
   const runFormula = async (f: typeof SAVED_FORMULAS[0]) => {
     setRunningFormula(f.id);
     try {
       const res = await fetch('/api/screen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conditions: f.conditions }) });
       const data = await res.json();
-      setFormulaResults(prev => ({ ...prev, [f.id]: data.results }));
+      setFormulaResults(prev ?> ({ ...prev, [f.id]: data.results }));
     } catch (e) { console.error(e); }
     finally { setRunningFormula(null); }
   };
 
-  const CoinRow = ({ c, showRsi }: { c: Coin; showRsi?: boolean }) => (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        {c.image && <img src={c.image} alt={c.name} width={22} height={22} className="rounded-full" />}
-        <span className="font-semibold text-sm">{c.symbol}</span>
-        <span className="text-gray-500 text-xs">{c.name}</span>
-      </div>
-      {showRsi ? (
-        <span className="text-green-500 font-semibold text-sm font-mono">RSI {(c.rsi_14 ?? 50).toFixed(0)}</span>
-      ) : (
-        <span className={`font-semibold text-sm font-mono ${c.price_change_percentage_24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-          {c.price_change_percentage_24h >= 0 ? '+' : ''}{c.price_change_percentage_24h.toFixed(2)}%
-        </span>
-      )}
-    </div>
-  );
-
-  return (
-    <div className="min-h-screen">
-      <header className="border-b border-gray-800" style={{ background: '#1A1A1D' }}>
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="text-2xl font-bold gradient-text">Crypto Screener Pro</Link>
-          <nav className="flex gap-6">
-            <Link href="/dashboard" className="text-white font-semibold">Dashboard</Link>
-            <Link href="/screener" className="text-gray-400 hover:text-white transition">Screener</Link>
-            <Link href="/formula/new" className="text-gray-400 hover:text-white transition">Formula Builder</Link>
-          </nav>
-        </div>
-      </header>
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <div className="card p-5"><div className="text-xs text-gray-500 uppercase mb-1">Total Coins</div><div className="text-2xl font-bold">{loading ? 'â€”' : coins.length}</div></div>
-          <div className="card p-5"><div className="text-xs text-gray-500 uppercase mb-1">Oversold RSI</div><div className="text-2xl font-bold text-green-500">{loading ? 'â€”' : oversoldCount}</div></div>
-          <div className="card p-5"><div className="text-xs text-gray-500 uppercase mb-1">Overbought RSI</div><div className="text-2xl font-bold text-red-500">{loading ? 'â€”' : overboughtCount}</div></div>
-          <div className="card p-5"><div className="text-xs text-gray-500 uppercase mb-1">Saved Formulas</div><div className="text-2xl font-bold">{SAVED_FORMULAS.length}</div></div>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-green-500 mb-3">Top Gainers 24h</h3>
-            {loading ? (<div className="space-y-3"><div className="h-10 rounded" style={sStyle}></div><div className="h-10 rounded" style={sStyle}></div><div className="h-10 rounded" style={sStyle}></div></div>) : (<div className="space-y-3">{topGainers.map(c => <CoinRow key={c.id} c={c} />)}</div>)}
-          </div>
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-red-500 mb-3">Top Losers 24h</h3>
-            {loading ? (<div className="space-y-3"><div className="h-10 rounded" style={sStyle}></div><div className="h-10 rounded" style={sStyle}></div><div className="h-10 rounded" style={sStyle}></div></div>) : (<div className="space-y-3">{topLosers.map(c => <CoinRow key={c.id} c={c} />)}</div>)}
-          </div>
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-yellow-500 mb-3">Oversold Coins</h3>
-            {loading ? (<div className="space-y-3"><div className="h-10 rounded" style={sStyle}></div><div className="h-10 rounded" style={sStyle}></div><div className="h-10 rounded" style={sStyle}></div></div>) : (<div className="space-y-3">{oversoldCoins.length === 0 && <p className="text-gray-500 text-sm">None right now</p>}{oversoldCoins.map(c => <CoinRow key={c.id} c={c} showRsi />)}</div>)}
-          </div>
-        </div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">My Formulas</h2>
-          <Link href="/formula/new" className="btn btn-primary text-sm">+ New Formula</Link>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {SAVED_FORMULAS.map(f => (
-            <div key={f.id} className="card p-5">
-              <div className="flex items-start justify-between mb-2">
-                <h3 className="font-semibold">{f.name}</h3>
-                <span className="w-2.5 h-2.5 rounded-full bg-green-500 mt-0.5"></span>
-              </div>
-              <p className="text-xs text-gray-500 mb-4">{f.description}</p>
-              {formulaResults[f.id] && <p className="text-xs text-green-400 mb-2 font-semibold">{formulaResults[f.id].length} coins matched</p>}
-              {formulaResults[f.id] && formulaResults[f.id].length > 0 && (
-                <div className="space-y-1.5 mb-3">
-                  {formulaResults[f.id].slice(0, 3).map(c => (
-                    <div key={c.id} className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-1.5">
-                        {c.image && <img src={c.image} alt={c.name} width={18} height={18} className="rounded-full" />}
-                        <span className="font-medium">{c.symbol}</span>
-                      </div>
-                      <span className={`font-mono text-xs ${c.price_change_percentage_24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>{c.price_change_percentage_24h >= 0 ? '+' : ''}{c.price_change_percentage_24h.toFixed(2)}%</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <button onClick={() => runFormula(f)} disabled={runningFormula === f.id || loading} className="btn btn-secondary w-full text-sm" style={{ opacity: (runningFormula === f.id || loading) ? 0.5 : 1 }}>
-                {runningFormula === f.id ? 'Running...' : formulaResults[f.id] ? 'Re-run' : 'Run Live'}
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
+  const Skel = ({ h = 20, w = '100%' }: { h><è¹Õµ‰•ÈìÜøðÍÑÉ¥¹œô¤€ôø€ (€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰Í­•±•Ñ½¸ˆÍÑå±”õíì¡•¥¡Ðè °Ý¥‘Ñ èÜõøøð½‘¥Øø(€€¤ì((€½¹ÍÐ½¥¹I½Ü€ô€¡ìŒ°‰…‘”øèìŒè½¥¸ì‰…‘”ðè€¡…¹”œð€ÉÍ¤œô¤€ôø€ (€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œ°Á…‘‘¥¹œè€œÀ¸ÙÉ•´€Àœ°‰½É‘•É	½ÑÑ½´è€œÅÁàÍ½±¥É‰„ ÈÔÔ°ÈÔÔ°ÈÔÔ°À¸ÀÐ¤œõôø(€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÀ¸ÙÉ•´œõøø(€€€€€€€íŒ¹¥µ…”€˜˜€ñ¥µœÍÉŒõíŒ¹¥µ…•ô…±ÐõíŒ¹¹…µ•ôÝ¥‘Ñ õìÈÑô¡•¥¡ÐõìÈÑôÍÑå±”õíì‰½É‘•ÉI…‘¥ÕÌè€œÔÀ”œõø€¼ùô(€€€€€€€€ñ‘¥Øø(€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸áÉ•´œ°™½¹Ñ]•¥¡Ðè€ØÀÀ°½±½Èè€œ˜Á˜É˜ÔœõøùíŒ¹Íåµ‰½°¹Ñ½UÁÁ•É…Í” ¥ôð½‘¥Øø(€€€€€€€€€€ñ‘¥ØÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ØàÜÕÉ•´œ°½±½Èè€œŒÔÐÕˆØØœõôùíŒ¹¹…µ•ôð½‘¥Øø(€€€€€€€€ð½‘¥Øø(€€€€€€ð½‘¥Øø(€€€€€í‰…‘”€ôôô€ÉÍ¤œ€ð€ (€€€€€€€€ñÍÁ…¸±…ÍÍ9…µ”ô‰ÉÍ¤µÁ¥±°ˆÍÑå±”õíì‰…­É½Õ¹è€É‰„ À°ÈÀÀ°ÄÈÀ°À¸ÄÈ¤œ°½±½Èè€œŒÀÁŒàÜàœõôùIM$ì¡Œ¹ÉÍ¥|ÄÐ€üü€ÔÀ¤¹Ñ½¥á• À¥ôð½ÍÁ…¸ø(€€€€€€¤€ð€ (€€€€€€€€ñÍÁ…¸±…ÍÍ9…µ”ô‰µ½¹¼ˆÍÑå±”õíì½±½ÈèŒ¹ÁÉ¥•}¡…¹•}Á•É•¹Ñ…•|ÈÑ €øô€À€ü€œŒÀÁŒàÜàœ€è€œ™˜ÑÑœ°™½¹Ñ]•¥¡Ðè€ØÀÀõøø(€€€€€€€€€íŒ¹ÁÉ¥•}¡…¹•}Á•É•¹Ñ…•|ÈÑ €øô€À€ð€œ¬œ€è€œõíŒ¹ÁÉ¥•}¡…¹•}Á•É•¹Ñ…•|ÈÑ ¹Ñ½¥á• È¥ô”(€€€€€€€€ð½ÍÁ…¸ø(€€€€€€¥ô(€€€€ð½‘¥Øø(€€¤ì((€É•ÑÕÉ¸€ (€€€€ñ‘¥ØÍÑå±”õíìµ¥¹!•¥¡Ðè€œÄÀÁÙ œõøø(€€€€€ì¼¨9…Ø€¨½ô(€€€€€€ñ¹…Ø±…ÍÍ9…µ”ô‰¹…ØµÍ¡•±°ˆø(€€€€€€€€ñ‘¥ØÍÑå±”õíìµ…á]¥‘Ñ è€ÄÈÀÀ°µ…É¥¸è€œÀ…ÕÑ¼œ°Á…‘‘¥¹œè€œÀ€Ä¸ÕÉ•´œ°¡•¥¡Ðè€ÔØ°‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œõøø(€€€€€€€€€€ñ1¥¹¬¡É•˜ôˆ¼ˆ±…ÍÍ9…µ”ô‰±½¼ˆùMÉ••¹•ÈAÉ¼ð½1¥¹¬ø(€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…Àè€Ðõøø(€€€€€€€€€€€€ñ1¥¹¬¡É•˜ôˆ½‘…Í¡‰½…Éˆ±…ÍÍ9…µ”ô‰…Ñ¥Ù”ˆù…Í¡‰½…Éð½1¥¹¬ø(€€€€€€€€€€€€ñ1¥¹¬¡É•˜ôˆ½ÍÉ••¹•ÈˆùMÉ••¹•Èð½1¥¹¬ø(€€€€€€€€€€€€ñ1¥¹¬¡É•˜ôˆ½™½ÉµÕ±„½¹•Üˆù½ÉµÕ±„	Õ¥±‘•Èð½1¥¹¬ø(€€€€€€€€€€ð½‘¥Øø(€€€€€€€€ð½‘¥Øø(€€€€€€ð½¹…Øø((€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰Á…”µÍ¡•±°ˆø(€€€€€€€ì¼¨!•…‘•È€¨½ô(€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€™±•àµ•¹œ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œ°µ…É¥¹	½ÑÑ½´è€œÄ¸ÜÕÉ•´œ°™±•á]É…Àè€ÝÉ…Àœ°…Àè€œÀ¸ÜÕÉ•´œõôø(€€€€€€€€€€ñ‘¥Øø(€€€€€€€€€€€€ñ ÄÍÑå±”õíì™½¹ÑM¥é”è€œÄ¸ÕÉ•´œ°™½¹Ñ]•¥¡Ðè€ÜÀÀ°±•ÑÑ•ÉMÁ…¥¹œè€œ´À¸ÀÉ•´œ°µ…É¥¹	½ÑÑ½´è€œÀ¸ÉÉ•´œõôùA…Í¡‰½…Éð½ Äø(€€€€€€€€€€€€ñÀÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ÜÕÉ•´œ°½±½Èè€œŒÔÐÕˆØØœõøùí±½…‘¥¹œ€ð€•Ñ¡¥¹ŸŠ˜œ€è€‘í½¥¹Ì¹±•¹Ñ¡ô½¥¹ÌÑÉ…­•ƒ
+Ü…ÕÑ¼µÉ•™É•Í¡•Ì•Ù•Éä€ÌÁÍôð½Àø(€€€€€€€€€€ð½‘¥Øø(€€€€€€€€ð½‘¥Øø((€€€€€€€ì¼¨MÑ…ÑÌÉ½Ü€¨½ô(€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€É¥œ°É¥‘Q•µÁ±…Ñ•½±Õµ¹Ìè€É•Á•…Ð¡…ÕÑ¼µ™¥Ð°µ¥¹µ…à ÄÐÁÁà°€Å™È¤¤œ°…Àè€œÀ¸ÜÕÉ•´œ°µ…É¥¹	½ÑÑ½´è€œÄ¸ÕÉ•´œõôø(€€€€€€€€€íl(€€€€€€€€€€€ì±…‰•°è€Q½Ñ…°½¥¹Ìœ°Ù…±Õ”è±½…‘¥¹œ€ð€ŸŠPœ€èMÑÉ¥¹œ¡½¥¹Ì¹±•¹Ñ ¤°½±½Èè€œ˜Á˜É˜Ôœô°(€€€€€€€€€€€ì±…‰•°è€=Ù•ÉÍ½±œ°Ù…±Õ”è±½…‘¥¹œ€ð€ŸŠPœ€èMÑÉ¥¹œ¡½Ù•ÉÍ½±‘½Õ¹Ð¤°½±½Èè€œŒÀÁŒàÜàœô°(€€€€€€€€€€€ì±…‰•°è€=Ù•É‰½Õ¡Ðœ°Ù…±Õ”è±½…‘¥¹œ€ð€ŸŠPœ€èMÑÉ¥¹œ¡½Ù•É‰½Õ¡Ñ½Õ¹Ð¤°½±½Èè€œ™˜ÑÑœô°(€€€€€€€€€€€ì±…‰•°è€½ÉµÕ±…Ìœ°Ù…±Õ”èMÑÉ¥¹œ¡MY}=I5U1L¹±•¹Ñ ¤°½±½Èè€œŒÑ˜á™˜œô°(€€€€€€€€€t¹µ…À¡Ì€ôø€ (€€€€€€€€€€€€ñ‘¥Ø­•äõíÌ¹±…‰•±ô±…ÍÍ9…µ”ô‰ÍÑ…Ðµ…Éˆø(€€€€€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰±…‰•°ˆùíÌ¹±…‰•±øð½‘¥Øø(€€€€€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰Ù…±Õ”ˆÍÑå±”õíì½±½ÈèÌ¹½±½ÈõôùíÌ¹Ù…±Õ•ôð½‘¥Øø(€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€¤¥ô(€€€€€€€€ð½‘¥Øø((€€€€€€€ì¼¨€Ìµ½°Á…¹•±Ì€¨½ô(€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€É¥œ°É¥‘Q•µÁ±…Ñ•½±Õµ¹Ìè€É•Á•…Ð¡…ÕÑ¼µ™¥Ð°µ¥¹µ…à ÈØÁÁà°€Å™È¤¤œ°…Àè€œÀ¸ÜÕÉ•´œ°µ…É¥¹	½ÑÑ½´è€œÄ¸ÜÕÉ•´œõôø(€€€€€€€€€íl(€€€€€€€€€€€ìÑ¥Ñ±”è€Q½À…¥¹•ÉÌœ°½±½Èè€œŒÀÁŒàÜàœ°‘…Ñ„èÑ½Á…¥¹•ÉÌ°‰…‘”è€¡…¹”œ…Ì½¹ÍÐ°¥½¸è€ŸŠZÈœô°(€€€€€€€€€€€ìÑ¥Ñ±”è€Q½À1½Í•ÉÌœ°½±½Èè€œ™˜ÑÑœ°‘…Ñ„èÑ½Á1½Í•ÉÌ°‰…‘”è€¡…¹”œ…Ì½¹ÍÐ°¥½¸è€ŸŠZðœô°(€€€€€€€€€€€ìÑ¥Ñ±”è€=Ù•ÉÍ½±œ°½±½Èè€œ˜Ôå”Áˆœ°‘…Ñ„è½Ù•ÉÍ½±‘½¥¹Ì°‰…‘”è€ÉÍ¤œ…Ì½¹ÍÐ°¥½¸è€ŸŠ^@œô°(€€€€€€€€€t¹µ…À¡Á…¹•°€ôø€ (€€€€€€€€€€€€ñ‘¥Ø­•äõíÁ…¹•°¹Ñ¥Ñ±•ô±…ÍÍ9…µ”ô‰…ÉˆÍÑå±”õõìÁ…‘‘¥¹œè€œÄ¸ÈÕÉ•´œõøø(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õõì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°…Àè€œÀ¸ÕÉ•´œ°µ…É¥¹	½ÑÑ½´è€œÀ¸ÜÕÉ•´œõôø(€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ÝÉ•´œ°½±½ÈèÁ…¹•°¹½±½ÈõôùíÁ…¹•°¹¥½¹ôð½ÍÁ…¸ø(€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ÝÉ•´œ°™½¹Ñ]•¥¡Ðè€ØÀÀ°½±½ÈèÁ…¹•°¹½±½È°Ñ•áÑQÉ…¹Í™½É´è€ÕÁÁ•É…Í”œ°±•ÑÑ•ÉMÁ…¥¹œè€œÀ¸ÀÙ•´œõôùíÁ…¹•°¹Ñ¥Ñ±•ôð½ÍÁ…¸ø(€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ØÈÕÉ•´œ°½±½Èè€œŒÔÐÕˆØØœ°µ…É¥¹1•™Ðè€…ÕÑ¼œõôøÈÑ ð½ÍÁ…¸ø(€€€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€€€€í±½…‘¥¹œ€ð€€ (€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°™±•á¥É•Ñ¥½¸è€½±Õµ¸œ°…Àè€ÄÀõøø(€€€€€€€€€€€€€€€€€€ñM­•° õìÈáô€¼øñM­•° õìÈáô€¼øñM­•° õìÈáô€¼øñM­•° õìÈáô€¼ø(€€€€€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€€€€€¤€ðÁ…¹•°¹‘…Ñ„¹±•¹Ñ €ôôô€À€ü€ (€€€€€€€€€€€€€€€€ñÀÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ÜÕÉ•´œ°½±½Èè€œŒÔÐÕˆØØœ°Á…‘‘¥¹œè€œÅÉ•´€Àœõøù9½Ñ¡¥¹œ¡•É”É¥¡Ð¹½Üð½Àø(€€€€€€€€€€€€€x€ (€€€€€€€€€€€€€€€€ñ‘¥Øø(€€€€€€€€€€€€€€€€€€íÁ…¹•°¹‘…Ñ„¹µ…À¡Œ€ôø€ñ½¥¹I½Ü­•äõíŒ¹¥‘ôŒõíô‰…‘”õíÁ…¹•°¹‰…‘•ô€¼ø¥ô(€€€€€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€€€€€¥ô(€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€€¤¥ô(€€€€€€€€ð½‘¥Øø((€€€€€€€ì¼¨½ÉµÕ±…ÌÍ•Ñ¥½¸€¨½ô(€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œ°µ…É¥¹	½ÑÑ½´è€œÀ¸ÜÕÉ•´œõøø(€€€€€€€€€€ñ ÈÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸àÜÕÉ•´œ°™½¹Ñ]•¥¡Ðè€ØÀÀ°±•ÑÑ•ÉMÁ…¥¹œè€œ´À¸ÀÅ•´œõôù5ä½ÉµÕ±…Ìð½ Èø(€€€€€€€€€€ñ1¥¹¬¡É•˜ôˆ½™½ÉµÕ±„½¹•Üˆ±…ÍÍ9…µ”ô‰‰Ñ¸‰Ñ¸µÁÉ¥µ…ÉäˆÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ÝÉ•´œ°Á…‘‘¥¹œè€œÀ¸ÌÕÉ•´€À¸ÝÉ•´œõôø¬9•Üð½1¥¹¬ø(€€€€€€€€ð½‘¥Øø(€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€É¥œ°É¥‘Q•µÁ±…Ñ•½±Õµ¹Ìè€É•Á•…Ð¡…ÕÑ¼µ™¥Ð°µ¥¹µ…à ÈØÁÁà°€Å™È¤¤œ°…Àè€œÀ¸ÜÕÉ•´œõôø(€€€€€€€€€íMY}=I5U1L¹µ…À¡˜€ôø€ (€€€€€€€€€€€€ñ‘¥Ø­•äõí˜¹¥‘ô±…ÍÍ9…µ”ô‰…ÉˆÍÑå±”õíìÁ…‘‘¥¹œè€œÄ¸ÈÕÉ•´œõôø(€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õíì‘¥ÍÁ±…äè€™±•àœ°…±¥¹%Ñ•µÌè€•¹Ñ•Èœ°©ÕÍÑ¥™å½¹Ñ•¹Ðè€ÍÁ…”µ‰•ÑÝ••¸œ°µ…É¥¹	½ÑÑ½´è€œÀ¸ÈÕÉ•´œõøø(€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õõì™½¹ÑM¥é”è€œÀ¸àÄÈÕÉ•´œ°™½¹Ñ]•¥¡Ðè€ØÀÀõôùí˜¹¹…µ•ôð½ÍÁ…¸ø(€€€€€€€€€€€€€€€€ñÍÁ…¸ÍÑå±”õíìÝ¥‘Ñ è€Ü°¡•¥¡Ðè€Ü°‰½É‘•ÉI…‘¥ÕÌè€œÔÀ””°‰…­É½Õ¹è€œŒÀÁŒàÜàœ°‰½áM¡…‘½Üè€œÀ€À€ÙÁàÉ‰„ À°ÈÀÀ°ÄÈÀ°À¸Ð¤œõôøð½ÍÁ…¸ø(€€€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€€€€€ñÀÍÑå±”õíì™½¹ÑM¥é”è€œÀ¸ØàÜÕÉ•´œ°½±½Èè€œŒÔÐÕˆØØœ°µ…É¥¹	½ÑÑ½´è€œÀ¸àÕÉ•´œõôùí˜¹‘•ÍÉ¥ÁÑ¥½¹øð½Àø((€€€€€€€€€€€€€Ù™½ÉµÕ±…I•ÍÕ±ÑÍm˜¹¥‘t€˜˜€ (€€€€€€€€€€€€€€€€ñÀÍÑå±”õõì™½¹ÑM¥é”è€œÀ¸ØàÜÕÉ•´œ°½±½Èè€œŒÀÁŒàÜàœ°™½¹Ñ]•¥¡Ðè€ØÀÀ°µ…É¥¹	½ÑÑ½´è€œÀ¸ÕÉ•´œõôùí™½ÉµÕ±…I•ÍÕ±ÑÍm˜¹¥‘t¹±•¹Ñ¡ô½¥¹Ìµ…Ñ¡•ð½Àø(€€€€€€€€€€€€€€¥ô(€€€€€€€€€€€€€í™½ÉµÕ±…I•ÍÕ±ÑÍm˜¹¥‘t€˜˜™½ÉµÕ±…I•ÍÕ±ÑÍm˜¹¥‘t¹±•¹Ñ €ø€À€˜˜€ (€€€€€€€€€€€€€€€€ñ‘¥ØÍÑå±”õõìµ…É¥¹	½ÑÑ½´è€œÀ¸ÜÕÉ•´œõôø(€€€€€€€€€€€€€€€€€€Ù™½ÉµÕ±…I•ÍÕ±ÑÍm˜¹¥‘t¹Í±¥” À°€Ì¤¹µ…À¡Œ€ôø€ñ½¥¹I½Ü­•äõíŒ¹¥‘ôŒõíô‰…‘”ô‰¡…¹”ˆ€¼ø¥ô(€€€€€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€€€€€¥ô((€€€€€€€€€€€€€€ñ‰ÕÑÑ½¸(€€€€€€€€€€€€€€€½¹±¥¬õì ¤€ôøÉÕ¹½ÉµÕ±„¡˜¥ô(€€€€€€€€€€€€€€€‘¥Í…‰±•õíÉÕ¹¹¥¹½ÉµÕ±„€ôôô˜¹¥ñð±½…‘¥¹ô(€€€€€€€€€€€€€€€±…ÍÍ9…µ”ô‰‰Ñ¸‰Ñ¸µ¡½ÍÐˆ(€€€€€€€€€€€€€€€ÍÑå±”õíìÝ¥‘Ñ è€œÄÀÀ”œ°™½¹ÑM¥é”è€œÀ¸ÝÉ•´œ°½Á…¥Ñäè€¡ÉÕ¹¹¥¹½ÉµÕ±„€ôôô˜¹¥ñð±½…‘¥¹œ¤€ü€À¸Ð€è€Äõô(€€€€€€€€€€€€€€ø(€€€€€€€€€€€€€€€€íÉÕ¹¹¥¹½ÉµÕ±„€ôôô˜¹¥€ü€IÕ¹¹¥¹ŸŠ˜œ€è™½ÉµÕ±…I•ÍÕ±ÑÍm˜¹¥‘t€ü€Ÿâ¼I”µÉÕ¸œ€è€ŸâZØIÕ¸1¥Ù”ô(€€€€€€€€€€€€€€ð½‰ÕÑÑ½¸ø(€€€€€€€€€€€€ð½‘¥Øø(€€€€€€€€€€¤¥ô(€€€€€€€€ð½‘¥Øø(€€€€€€ð½‘¥Øø(€€€€ð½‘¥Øø(€€€¤ì)ô(

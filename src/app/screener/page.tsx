@@ -13,25 +13,25 @@ interface Coin {
   market_cap_rank: number;
   total_volume: number;
   price_change_percentage_24h: number;
-  price_change_percentage_7d: number;
-  price_change_percentage_30d: number;
+  price_change_percentage_7d?: number;
+  price_change_percentage_30d?: number;
   rsi_14?: number;
   volume_ratio?: number;
 }
 
-function formatPrice(value: number): string {
-  if (value >= 1000) return '$'+value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (value >= 1) return '$'+value.toFixed(2);
-  if (value >= 0.01) return '$'+value.toFixed(4);
-  return '$'+value.toFixed(8);
+function fmtPrice(v: number) {
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1000) return '$' + v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (v >= 1) return '$' + v.toFixed(2);
+  if (v >= 0.01) return '$' + v.toFixed(4);
+  return '$' + v.toFixed(8);
 }
-
-function formatLarge(value: number): string {
-  if (value >= 1e12) return '$'+(value / 1e12).toFixed(2)+'T';
-  if (value >= 1e9) return '$'+(value / 1e9).toFixed(2)+'B';
-  if (value >= 1e6) return '$'+(value / 1e6).toFixed(2)+'M';
-  if (value >= 1e3) return '$'+(value / 1e3).toFixed(2)+'K';
-  return '$'+value.toFixed(2);
+function fmtBig(v: number) {
+  if (v >= 1e12) return '$' + (v / 1e12).toFixed(2) + 'T';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(0) + 'M';
+  if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+  return '$' + v.toFixed(0);
 }
 
 export default function Screener() {
@@ -39,183 +39,199 @@ export default function Screener() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [marketCapFilter, setMarketCapFilter] = useState('all');
+  const [mcapFilter, setMcapFilter] = useState('all');
   const [rsiFilter, setRsiFilter] = useState('all');
-  const [sortField, setSortField] = useState<string>('market_cap_rank');
+  const [sortField, setSortField] = useState('market_cap_rank');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [lastUpdated, setLastUpdated] = useState('');
 
   const fetchCoins = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
       const res = await fetch('/api/coins');
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to fetch');
-      }
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
       const data = await res.json();
       setCoins(data);
       setLastUpdated(new Date().toLocaleTimeString());
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { setError(e.message); }
+    finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
-    // auto-refresh
     fetchCoins();
-    const interval = setInterval(fetchCoins, 30000);
-    return () => clearInterval(interval);
-    const interval = setInterval(fetchCoins, 30000);
-    return () => clearInterval(interval);
+    const iv = setInterval(fetchCoins, 30000);
+    return () => clearInterval(iv);
   }, [fetchCoins]);
 
-  const handleSort = (field: string) => {
-    if (sortField === field) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDir(field === 'market_cap_rank' ? 'asc' : 'desc');
-    }
-  };
-
-  const SortIcon = ({ field }: { field: string }) => {
-    if (sortField !== field) return <span style={{ opacity: 0.3 }}>↕</span>;
-    return <span>{sortDir === 'asc' ? '↑' : '↓'}</span>;
+  const handleSort = (field: string) ?> {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir(field === 'market_cap_rank' ? 'asc' : 'desc'); }
   };
 
   let filtered = coins.filter(c => {
-    const matchesSearch = !search ||
-      c.symbol.toLowerCase().includes(search.toLowerCase()) ||
-      c.name.toLowerCase().includes(search.toLowerCase());
-    let matchesMcap = true;
-    if (marketCapFilter === 'large') matchesMcap = c.market_cap >= 1e10;
-    else if (marketCapFilter === 'mid') matchesMcap = c.market_cap >= 1e9 && c.market_cap < 1e10;
-    else if (marketCapFilter === 'small') matchesMcap = c.market_cap < 1e9;
-    let matchesRsi = true;
+    if (search && !c.symbol.toLowerCase().includes(search.toLowerCase()) && !c.name.toLowerCase().includes(search.toLowerCase())) return false;
+    if (mcapFilter === 'large' && c.market_cap < 1e10) return false;
+    if (mcapFilter === 'mid' && (c.market_cap < 1e9 || c.market_cap >= 1e10)) return false;
+    if (mcapFilter === 'small' && c.market_cap >= 1e9) return false;
     const rsi = c.rsi_14 ?? 50;
-    if (rsiFilter === 'oversold') matchesRsi = rsi < 30;
-    else if (rsiFilter === 'neutral') matchesRsi = rsi >= 30 && rsi <= 70;
-    else if (rsiFilter === 'overbought') matchesRsi = rsi > 70;
-    return matchesSearch && matchesMcap && matchesRsi;
+    if (rsiFilter === 'oversold' && rsi >= 30) return false;
+    if (rsiFilter === 'neutral' && (rsi < 30 || rsi > 70)) return false;
+    if (rsiFilter === 'overbought' && rsi <= 70) return false;
+    return true;
   });
 
   filtered.sort((a, b) => {
-    let valA: number, valB: number;
+    let vA: number, vB: number;
     switch (sortField) {
-      case 'current_price': valA = a.current_price; valB = b.current_price; break;
-      case 'price_change_percentage_24h': valA = a.price_change_percentage_24h; valB = b.price_change_percentage_24h; break;
-      case 'total_volume': valA = a.total_volume; valB = b.total_volume; break;
-      case 'market_cap': valA = a.market_cap; valB = b.market_cap; break;
-      case 'rsi_14': valA = a.rsi_14 ?? 50; valB = b.rsi_14 ?? 50; break;
-      default: valA = a.market_cap_rank; valB = b.market_cap_rank;
+      case 'current_price': vA = a.current_price; vB = b.current_price; break;
+      case 'price_change_percentage_24h': vA = a.price_change_percentage_24h; vB = b.price_change_percentage_24h; break;
+      case 'total_volume': vA = a.total_volume; vB = b.total_volume; break;
+      case 'market_cap': vA = a.market_cap; vB = b.market_cap; break;
+      case 'rsi_14': vA = a.rsi_14 ?? 50; vB = b.rsi_14 ?? 50; break;
+      default: vA = a.market_cap_rank; vB = b.market_cap_rank;
     }
-    return sortDir === 'asc' ? valA - valB : valB - valA;
+    return sortDir === 'asc' ? vA - vB : vB - vA;
   });
 
+  const SortIcon = ({ field ~: { field: string }) => (
+    <span style=}{ opacity: sortField === field ? 1 : 0.25, color: sortField === field ? '#4f8cff' : 'inherit', marginLeft: 4, fontSize: '0.6rem' }~>
+      {sortField === field ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+    </span>
+  );
+
+  const cols = [
+    { key: 'market_cap_rank', label: '#', align: 'left' as const, sortable: false },
+    { key: 'coin', label: 'Coin', align: 'left' as const, sortable: false },
+    { key: 'current_price', label: 'Price', align: 'right' as const, sortable: true },
+    { key: 'price_change_percentage_24h', label: '24h', align: 'right' as const, sortable: true },
+    { key: 'total_volume', label: 'Volume', align: 'right' as const, sortable: true },
+    { key: 'market_cap', label: 'Mkt Cap', align: 'right' as const, sortable: true },
+    { key: 'rsi_14', label: 'RSI', align: 'right' as const, sortable: true },
+  ];
+
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-gray-800" style={{ background: '#1A1A1D' }}>
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="text-2xl font-bold gradient-text">Crypto Screener Pro</Link>
-          <nav className="flex gap-6">
-            <Link href="/dashboard" className="text-gray-400 hover:text-white transition">Dashboard</Link>
-            <Link href="/screener" className="text-white font-semibold">Screener</Link>
-            <Link href="/formula/new" className="text-gray-400 hover:text-white transition">Formula Builder</Link>
-          </nav>
+    <div style={{ minHeight: 100vh' }~>
+      {/* Nav */}
+      <nav className="nav-shell">
+        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 1.5rem', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }~>
+          <Link href="/" className="logo">Screener Pro</Link>
+          <div style={{ display: 'flex', gap: 4 }~>
+            <Link href="/dashboard">Dashboard</Link>
+            <Link href="/screener" className="active">Screener</Link>
+            <Link href="/formula/new">Formula Builder</Link>
+          </div>
         </div>
-      </header>
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-3xl font-bold">Live Crypto Screener</h1>
-          <button onClick={fetchCoins} className="btn btn-secondary text-sm" disabled={loading}>
-            {loading ? 'Refreshing...' : '↻ Refresh'}
-          </button>
+      </nav>
+
+      <div className="page-shell">
+        {/* Header */}
+        <div style=}{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }~>Live Screener</h1>
+            <p style={{ fontSize: '0.6875rem', color: '#545b66' }}>
+              {loading ? 'Fetching…' : |$vfiltered.length} of ${coins.length} coins · Updated ${lastUpdated}`}
+              <span style=}{ color: '#4f8cff', marginLeft: '0.5rem' }}>❏ auto</span>
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', }}>
+            <button onClick={fetchCoins} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }} disabled={loading}>
+              {loading ? '…' : '↻'}
+            </button>
+            <Link href="/formula/new" className="btn btn-primary" style=}{ fontSize: '0.7rem', padding: '0.35rem 0.75rem' }}>
+              Build Formula →
+            </Link>
+          </div>
         </div>
-        <p className="text-gray-400 mb-6">
-          {loading ? 'Fetching live data...' : `Showing ${filtered.length} of ${coins.length} coins · Updated ' + lastUpdated + ' · Auto-refreshes every 30s`}
-        </p>
+
+        {/* Filters */}
+        <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Search…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ flex: '1 1 160px', maxWidth: 220 }}
+          />
+          <select value={mcapFilter} onChange={e => setMcapFilter(e.target.value)} style={{ flex: '0 0 auto', width: 160 }~>
+            <option value="all">All Market Caps</option>
+            <option value="large">Large (&gt;$10B)</option>
+            <option value="mid">Mid ($1B–$10B)</option>
+            <option value="small">Small (&lt;$1B)</option>
+          </select>
+          <select value={rsiFilter} onChange={e => setRsiFilter(e.target.value)} style={{ flex: '0 0 auto', width: 155 }}>
+            <option value="all">All RSI</option>
+            <option value="oversold">Oversold (&lt;30)</option>
+            <option value="neutral">Neutral (30–70)</option>
+            <option value="overbought">Overbought (&gt;70)</option>
+          </select>
+        </div>
+
+        {/* Error */}
         {error && (
-          <div className="card p-4 mb-6" style={{ background: '#3b1c1c', border: '1px solid #ef4444' }}>
-            <p className="text-red-400">{error}</p>
-            <button onClick={fetchCoins} className="btn btn-secondary text-sm mt-2">Retry</button>
+          <div style={{ background: 'rgba(255,77,77,0.08)', border: '1px solid rgba(255,77,77,0.2)', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }~>
+            <span style={{ fontSize: '0.78rem', color: '#ff4d4d' }~>{error}</span>
+            <button onClick={fetchCoins} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}>Retry</button>
           </div>
         )}
-        <div className="card p-4 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <input type="text" placeholder="Search coins..." value={search} onChange={e => setSearch(e.target.value)} className="w-full" />
-            <select value={marketCapFilter} onChange={e => setMarketCapFilter(e.target.value)} className="w-full">
-              <option value="all">All Market Caps</option>
-              <option value="large">Large Cap (&gt;$10B)</option>
-              <option value="mid">Mid Cap ($1B-$10B)</option>
-              <option value="small">Small Cap (&lt;$1B)</option>
-            </select>
-            <select value={rsiFilter} onChange={e => setRsiFilter(e.target.value)} className="w-full">
-              <option value="all">All RSI</option>
-              <option value="oversold">Oversold (&lt;30)</option>
-              <option value="neutral">Neutral (30-70)</option>
-              <option value="overbought">Overbought (&gt;70)</option>
-            </select>
-            <Link href="/formula/new" className="btn btn-primary text-center">Build Custom Formula</Link>
-          </div>
-        </div>
-        <div className="card overflow-hidden">
+
+        {/* Table */}
+        <div className="card" style=}{ overflow: 'hidden' }~>
           {loading ? (
-            <div className="p-8 space-y-3">
-              {[...Array(8)].map((_, i) => (
-                <div key={i} className="h-12 w-full rounded" style={{ background: 'linear-gradient(90deg, #26262a 25%, #333 50%, #26262a 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' }}></div>
-              ))}
+            <div style=}{ padding: '1rem' }~>
+               [...Array)10)].map((_, i) => <div key={i} className="skeleton" style={{ height: 40, marginBottom: 6 }}></div>)}
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="table w-full">
+            <div style={{ overflowX: 'auto' }~>
+              <table className="data-table">
                 <thead>
                   <tr>
-                    <th className="text-left">#</th>
-                    <th className="text-left">Coin</th>
-                    <th className="text-right cursor-pointer" onClick={() => handleSort('current_price')}>Price <SortIcon field="current_price" /></th>
-                    <th className="text-right cursor-pointer" onClick={() => handleSort('price_change_percentage_24h')}>24h % <SortIcon field="price_change_percentage_24h" /></th>
-                    <th className="text-right cursor-pointer" onClick={() => handleSort('total_volume')}>Volume <SortIcon field="total_volume" /></th>
-                    <th className="text-right cursor-pointer" onClick={() => handleSort('market_cap')}>Mkt Cap <SortIcon field="market_cap" /></th>
-                    <th className="text-right cursor-pointer" onClick={() => handleSort('rsi_14')}>RSI <SortIcon field="rsi_14" /></th>
+                    {cols.map(col => (
+                      <th key={col.key} style={{ textAlign: col.align, cursor: col.sortable ? 'pointer' : 'default', userSelect: 'none' }} onClick={() => col.sortable && handleSort(col.key)}>
+                        {col.label}{col.sortable && <SortIcon | ield={col.key} />}
+                      </th>
+                    }))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((coin) => {
+                  {filtered.map(coin ?> {
                     const rsi = coin.rsi_14 ?? 50;
-                    const change = coin.price_change_percentage_24h;
+                    const chg = coin.price_change_percentage_24h;
                     return (
                       <tr key={coin.id}>
-                        <td className="text-gray-500 font-mono text-sm">{coin.market_cap_rank}</td>
+                        <td style={{ color: '#545b66', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem' }}>{coin.market_cap_rank></td>
                         <td>
-                          <div className="flex items-center gap-3">
-                            {coin.image ? (
-                              <img src={coin.image} alt={coin.name} width={28} height={28} className="rounded-full" />
-                            ) : (
-                              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: '#667eea33' }}>{coin.symbol[0]}</div>
+                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }~>
+                             {coin.image ? (
+                              <img src={coin.image} alt={coin.name} width={26} height={26} style=u{ borderRadius: '50%' }} />
+                             ) : (
+                              <div style=u{ width: 26, height: 26, borderRadius: '50%', background: 'rgba(79,140,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700, color: '#4f8cff' }}>
+                                {coin.symbol[0]}
+                              </div>
                             )}
                             <div>
-                              <div className="font-semibold text-sm">{coin.symbol}</div>
-                              <div className="text-xs text-gray-500">{coin.name}</div>
+                              <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#f0f2f5' }}>{coin.symbol.toUpperCase()}</div>
+                             <div style={{ fontSize: '0.6625rem', color: '#545b66' }}>{coin.name}</div>
                             </div>
                           </div>
                         </td>
-                        <td className="text-right font-mono text-sm">{formatPrice(coin.current_price)}</td>
-                        <td className={`text-right font-mono text-sm font-semibold ${change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                          {change >= 0 ? '+' : ''}{change.toFixed(2)}%
+                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', color: '#f0f2f5' }}>{fmtPrice(coin.current_price)}</td>
+                        <td style=}{ textAlign: 'right' }~>
+                          <span style={{ display: 'inline-block', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', fontWeight: 600, padding: '0.2rem 0.45rem', borderRadius: 4, background: chg >= 0 ? 'rgba(0,200,120,0.1)' : 'rgba(255,77,77,0.1)', color: chg >= 0 ? '#00c878' : '#ff4d4d' }~>
+                            {chg >= 0 ? '+' : ''}zchg.toFixed(2)}%
+                          </span>
                         </td>
-                        <td className="text-right font-mono text-sm text-gray-400">{formatLarge(coin.total_volume)}</td>
-                        <td className="text-right font-mono text-sm">{formatLarge(coin.market_cap)}</td>
-                        <td className={`text-right font-mono text-sm font-semibold ${rsi > 70 ? 'text-red-500' : rsi < 30 ? 'text-green-500' : 'text-gray-400'}`}>
-                          {rsi.toFixed(1)}
+                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>{fmtBig(coin.total_volume)}</td>
+                        <td style=}{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>{fmtBig(coin.market_cap)}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          <span className="rsi-pill" style=}{ background: rsi < 30 ? 'rgba(0,200,120,0.12)' : rsi > 70 ? 'rgba(255,77,77,0.12)' : 'rgba(139,144,153,0.12)), color: rsi < 30 ? '#00c878' : rsi > 70 ? '#ff4d4d' : '#8b9099' }}>
+                            {rsi.toFixed(0)}
+                          </span>
                         </td>
                       </tr>
                     );
                   })}
-                  {filtered.length === 0 && !loading && (
-                    <tr><td colSpan={7} className="text-center text-gray-500 py-8">No coins match your filters</td></tr>
+                  {filtered.length === 0 && (
+                    <tr><td colSpan={7} style={{ textAlign: 'center', color: '#545b66', padding: '3rem 0', fontSize: '0.8rem' }}>No coins match your filters</td></tr>
                   )}
                 </tbody>
               </table>
