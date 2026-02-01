@@ -29,13 +29,13 @@ export default function Dashboard() {
   const [formulaResults, setFormulaResults] = useState<Record<string, Coin[]>>({});
   const [runningFormula, setRunningFormula] = useState<string | null>(null);
 
-  const fetchCoins = () => {
-    fetch('/api/coins').then(r => r.json()).then(d => { setCoins(d); setLoading(false); }).catch(() => setLoading(false));
+  const fetchCoins = (bust = false) => {
+    fetch(bust ? '/api/coins?bust=1' : '/api/coins').then(r => r.json()).then(d => { setCoins(d); setLoading(false); }).catch(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchCoins();
-    const interval = setInterval(fetchCoins, 30000);
+    const interval = setInterval(() => fetchCoins(false), 30000);
     return () => clearInterval(interval);
   }, []);
 

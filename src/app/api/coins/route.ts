@@ -4,9 +4,11 @@ import { addEstimatedIndicators } from '@/lib/indicators';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const coins = await fetchTop300Coins();
+    const url = new URL(req.url);
+    const bust = url.searchParams.has('bust');
+    const coins = await fetchTop300Coins(bust);
     const coinsWithIndicators = coins.map(coin => addEstimatedIndicators(coin));
     return NextResponse.json(coinsWithIndicators);
   } catch (error: any) {

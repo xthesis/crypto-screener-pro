@@ -10,11 +10,11 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
 // ============================================
 // FETCH TOP 300 COINS FROM COINGECKO
 // ============================================
-export async function fetchTop300Coins(): Promise<Coin[]> {
+export async function fetchTop300Coins(bustCache = false): Promise<Coin[]> {
   const cacheKey = 'top300';
   const cached = coinCache.get(cacheKey);
   
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+  if (!bustCache && cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.data;
   }
 

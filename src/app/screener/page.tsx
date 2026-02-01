@@ -45,10 +45,10 @@ export default function Screener() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [lastUpdated, setLastUpdated] = useState('');
 
-  const fetchCoins = useCallback(async () => {
+  const fetchCoins = useCallback(async (bust = false) => {
     setError(null);
     try {
-      const res = await fetch('/api/coins');
+      const res = await fetch(bust ? '/api/coins?bust=1' : '/api/coins');
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
       const data = await res.json();
       setCoins(data);
@@ -59,7 +59,7 @@ export default function Screener() {
 
   useEffect(() => {
     fetchCoins();
-    const iv = setInterval(fetchCoins, 30000);
+    const iv = setInterval(() => fetchCoins(false), 30000);
     return () => clearInterval(iv);
   }, [fetchCoins]);
 
@@ -134,7 +134,7 @@ export default function Screener() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <button onClick={fetchCoins} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }} disabled={loading}>
+            <button onClick={() => fetchCoins(true)} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }} disabled={loading}>
               {loading ? '…' : '↻'}
             </button>
             <Link href="/formula/new" className="btn btn-primary" style={{ fontSize: '0.7rem', padding: '0.35rem 0.75rem' }}>
@@ -170,7 +170,7 @@ export default function Screener() {
         {error && (
           <div style={{ background: 'rgba(255,77,77,0.08)', border: '1px solid rgba(255,77,77,0.2)', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: '0.78rem', color: '#ff4d4d' }}>{error}</span>
-            <button onClick={fetchCoins} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}>Retry</button>
+            <button onClick={() => fetchCoins(true)} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}>Retry</button>
           </div>
         )}
 
