@@ -63,7 +63,7 @@ export default function Screener() {
     return () => clearInterval(iv);
   }, [fetchCoins]);
 
-  const handleSort = (field: string) ?> {
+  const handleSort = (field: string) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortField(field); setSortDir(field === 'market_cap_rank' ? 'asc' : 'desc'); }
   };
@@ -93,8 +93,8 @@ export default function Screener() {
     return sortDir === 'asc' ? vA - vB : vB - vA;
   });
 
-  const SortIcon = ({ field ~: { field: string }) => (
-    <span style=}{ opacity: sortField === field ? 1 : 0.25, color: sortField === field ? '#4f8cff' : 'inherit', marginLeft: 4, fontSize: '0.6rem' }~>
+  const SortIcon = ({ field }: { field: string }) => (
+    <span style={{ opacity: sortField === field ? 1 : 0.25, color: sortField === field ? '#4f8cff' : 'inherit', marginLeft: 4, fontSize: '0.6rem' }}>
       {sortField === field ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
     </span>
   );
@@ -110,12 +110,12 @@ export default function Screener() {
   ];
 
   return (
-    <div style={{ minHeight: 100vh' }~>
+    <div style={{ minHeight: '100vh' }}>
       {/* Nav */}
       <nav className="nav-shell">
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 1.5rem', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }~>
+        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 1.5rem', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Link href="/" className="logo">Screener Pro</Link>
-          <div style={{ display: 'flex', gap: 4 }~>
+          <div style={{ display: 'flex', gap: 4 }}>
             <Link href="/dashboard">Dashboard</Link>
             <Link href="/screener" className="active">Screener</Link>
             <Link href="/formula/new">Formula Builder</Link>
@@ -125,19 +125,19 @@ export default function Screener() {
 
       <div className="page-shell">
         {/* Header */}
-        <div style=}{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }~>Live Screener</h1>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>Live Screener</h1>
             <p style={{ fontSize: '0.6875rem', color: '#545b66' }}>
-              {loading ? 'Fetching…' : |$vfiltered.length} of ${coins.length} coins · Updated ${lastUpdated}`}
-              <span style=}{ color: '#4f8cff', marginLeft: '0.5rem' }}>❏ auto</span>
+              {loading ? 'Fetching…' : `${filtered.length} of ${coins.length} coins · Updated ${lastUpdated}`}
+              <span style={{ color: '#4f8cff', marginLeft: '0.5rem' }}>● auto</span>
             </p>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <button onClick={fetchCoins} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }} disabled={loading}>
               {loading ? '…' : '↻'}
             </button>
-            <Link href="/formula/new" className="btn btn-primary" style=}{ fontSize: '0.7rem', padding: '0.35rem 0.75rem' }}>
+            <Link href="/formula/new" className="btn btn-primary" style={{ fontSize: '0.7rem', padding: '0.35rem 0.75rem' }}>
               Build Formula →
             </Link>
           </div>
@@ -152,7 +152,7 @@ export default function Screener() {
             onChange={e => setSearch(e.target.value)}
             style={{ flex: '1 1 160px', maxWidth: 220 }}
           />
-          <select value={mcapFilter} onChange={e => setMcapFilter(e.target.value)} style={{ flex: '0 0 auto', width: 160 }~>
+          <select value={mcapFilter} onChange={e => setMcapFilter(e.target.value)} style={{ flex: '0 0 auto', width: 160 }}>
             <option value="all">All Market Caps</option>
             <option value="large">Large (&gt;$10B)</option>
             <option value="mid">Mid ($1B–$10B)</option>
@@ -168,62 +168,66 @@ export default function Screener() {
 
         {/* Error */}
         {error && (
-          <div style={{ background: 'rgba(255,77,77,0.08)', border: '1px solid rgba(255,77,77,0.2)', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }~>
-            <span style={{ fontSize: '0.78rem', color: '#ff4d4d' }~>{error}</span>
+          <div style={{ background: 'rgba(255,77,77,0.08)', border: '1px solid rgba(255,77,77,0.2)', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.78rem', color: '#ff4d4d' }}>{error}</span>
             <button onClick={fetchCoins} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}>Retry</button>
           </div>
         )}
 
         {/* Table */}
-        <div className="card" style=}{ overflow: 'hidden' }~>
+        <div className="card" style={{ overflow: 'hidden' }}>
           {loading ? (
-            <div style=}{ padding: '1rem' }~>
-               [...Array)10)].map((_, i) => <div key={i} className="skeleton" style={{ height: 40, marginBottom: 6 }}></div>)}
+            <div style={{ padding: '1rem' }}>
+              {[...Array(10)].map((_, i) => <div key={i} className="skeleton" style={{ height: 40, marginBottom: 6 }}></div>)}
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }~>
+            <div style={{ overflowX: 'auto' }}>
               <table className="data-table">
                 <thead>
                   <tr>
                     {cols.map(col => (
-                      <th key={col.key} style={{ textAlign: col.align, cursor: col.sortable ? 'pointer' : 'default', userSelect: 'none' }} onClick={() => col.sortable && handleSort(col.key)}>
-                        {col.label}{col.sortable && <SortIcon | ield={col.key} />}
+                      <th
+                        key={col.key}
+                        style={{ textAlign: col.align, cursor: col.sortable ? 'pointer' : 'default', userSelect: 'none' }}
+                        onClick={() => col.sortable && handleSort(col.key)}
+                      >
+                        {col.label}{col.sortable && <SortIcon field={col.key} />}
                       </th>
-                    }))}
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(coin ?> {
+                  {filtered.map(coin => {
                     const rsi = coin.rsi_14 ?? 50;
                     const chg = coin.price_change_percentage_24h;
                     return (
                       <tr key={coin.id}>
-                        <td style={{ color: '#545b66', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem' }}>{coin.market_cap_rank></td>
+                        <td style={{ color: '#545b66', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem' }}>{coin.market_cap_rank}</td>
                         <td>
-                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }~>
-                             {coin.image ? (
-                              <img src={coin.image} alt={coin.name} width={26} height={26} style=u{ borderRadius: '50%' }} />
-                             ) : (
-                              <div style=u{ width: 26, height: 26, borderRadius: '50%', background: 'rgba(79,140,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700, color: '#4f8cff' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                            {coin.image ? (
+                              <img src={coin.image} alt={coin.name} width={26} height={26} style={{ borderRadius: '50%' }} />
+                            ) : (
+                              <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'rgba(79,140,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700, color: '#4f8cff' }}>
                                 {coin.symbol[0]}
                               </div>
                             )}
                             <div>
                               <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#f0f2f5' }}>{coin.symbol.toUpperCase()}</div>
-                             <div style={{ fontSize: '0.6625rem', color: '#545b66' }}>{coin.name}</div>
+                              <div style={{ fontSize: '0.6625rem', color: '#545b66' }}>{coin.name}</div>
                             </div>
                           </div>
                         </td>
                         <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', color: '#f0f2f5' }}>{fmtPrice(coin.current_price)}</td>
-                        <td style=}{ textAlign: 'right' }~>
-                          <span style={{ display: 'inline-block', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', fontWeight: 600, padding: '0.2rem 0.45rem', borderRadius: 4, background: chg >= 0 ? 'rgba(0,200,120,0.1)' : 'rgba(255,77,77,0.1)', color: chg >= 0 ? '#00c878' : '#ff4d4d' }~>
-                            {chg >= 0 ? '+' : ''}zchg.toFixed(2)}%
+                        <td style={{ textAlign: 'right' }}>
+                          <span style={{ display: 'inline-block', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', fontWeight: 600, padding: '0.2rem 0.45rem', borderRadius: 4, background: chg >= 0 ? 'rgba(0,200,120,0.1)' : 'rgba(255,77,77,0.1)', color: chg >= 0 ? '#00c878' : '#ff4d4d' }}>
+                            {chg >= 0 ? '+' : ''}{chg.toFixed(2)}%
                           </span>
                         </td>
                         <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>{fmtBig(coin.total_volume)}</td>
-                        <td style=}{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>{fmtBig(coin.market_cap)}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>{fmtBig(coin.market_cap)}</td>
                         <td style={{ textAlign: 'right' }}>
-                          <span className="rsi-pill" style=}{ background: rsi < 30 ? 'rgba(0,200,120,0.12)' : rsi > 70 ? 'rgba(255,77,77,0.12)' : 'rgba(139,144,153,0.12)), color: rsi < 30 ? '#00c878' : rsi > 70 ? '#ff4d4d' : '#8b9099' }}>
+                          <span className="rsi-pill" style={{ background: rsi < 30 ? 'rgba(0,200,120,0.12)' : rsi > 70 ? 'rgba(255,77,77,0.12)' : 'rgba(139,144,153,0.12)', color: rsi < 30 ? '#00c878' : rsi > 70 ? '#ff4d4d' : '#8b9099' }}>
                             {rsi.toFixed(0)}
                           </span>
                         </td>
