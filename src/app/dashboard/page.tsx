@@ -31,8 +31,14 @@ export default function Dashboard() {
   const [formulaResults, setFormulaResults] = useState<Record<string, Coin[]>>({});
   const [runningFormula, setRunningFormula] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchCoins = () => {
     fetch('/api/coins').then(r => r.json()).then(d => { setCoins(d); setLoading(false); }).catch(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchCoins();
+    const interval = setInterval(fetchCoins, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 3);
