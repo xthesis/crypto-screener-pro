@@ -9,7 +9,6 @@ const EXCHANGE_LABELS: Record<ExchangeName, string> = {
   bybit: 'Bybit',
   okx: 'OKX',
   gateio: 'Gate.io',
-  coinbase: 'Coinbase',
   hyperliquid: 'Hyperliquid',
   aster: 'Aster',
 };
@@ -19,7 +18,6 @@ const EXCHANGE_EMOJIS: Record<ExchangeName, string> = {
   bybit: '🇧',
   okx: '🅾️',
   gateio: '🚪',
-  coinbase: '🪙',
   hyperliquid: '💧',
   aster: '⭐',
 };
@@ -32,7 +30,7 @@ const TIMEFRAMES: { value: Timeframe; label: string }[] = [
   { value: '1w', label: '1W' },
 ];
 
-const ALL_EXCHANGES: ExchangeName[] = ['binance', 'bybit', 'okx', 'gateio', 'coinbase', 'hyperliquid', 'aster'];
+const ALL_EXCHANGES: ExchangeName[] = ['binance', 'bybit', 'okx', 'gateio', 'hyperliquid', 'aster'];
 
 function fmtPrice(v: number) {
   if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';

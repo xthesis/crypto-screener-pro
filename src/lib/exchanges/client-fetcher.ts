@@ -11,7 +11,7 @@ export interface SimpleTicker {
   exchange: string;
 }
 
-export type ExchangeName = 'binance' | 'bybit' | 'okx' | 'gateio' | 'coinbase' | 'hyperliquid' | 'aster';
+export type ExchangeName = 'binance' | 'bybit' | 'okx' | 'gateio' | 'hyperliquid' | 'aster';
 export type Timeframe = '15m' | '1h' | '4h' | '1d' | '1w';
 
 // Minimum 24h volume in USD to filter out illiquid/dead tokens
@@ -136,53 +136,6 @@ export async function fetchGateioTickers(): Promise<SimpleTicker[]> {
       .filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
   } catch (error: any) {
     console.error('[Gate.io Client] Error:', error.message);
-    return [];
-  }
-}
-
-// Coinbase client-side fetch
-export async function fetchCoinbaseTickers(): Promise<SimpleTicker[]> {
-  try {
-    // Coinbase uses a different API structure - fetch products first, then stats
-    const productsResponse = await fetch('https://api.exchange.coinbase.com/products');
-    if (!productsResponse.ok) throw new Error(`Coinbase HTTP ${productsResponse.status}`);
-    
-    const products = await productsResponse.json();
-    const usdPairs = products.filter((p: any) => p.quote_currency === 'USD' && !p.trading_disabled);
-    
-    // Fetch 24hr stats for each pair (limited to top pairs to avoid rate limits)
-    const tickers: SimpleTicker[] = [];
-    const topPairs = usdPairs.slice(0, 50); // Limit to avoid rate limiting
-    
-    await Promise.all(
-      topPairs.map(async (product: any) => {
-        try {
-          const statsResponse = await fetch(`https://api.exchange.coinbase.com/products/${product.id}/stats`);
-          if (!statsResponse.ok) return;
-          
-          const stats = await statsResponse.json();
-          const price = parseFloat(stats.last);
-          const open = parseFloat(stats.open);
-          const priceChange = open > 0 ? ((price - open) / open) * 100 : 0;
-          
-          tickers.push({
-            symbol: product.id.replace('-', ''),
-            base: product.base_currency,
-            quote: 'USD',
-            price,
-            volume24h: parseFloat(stats.volume) * price,
-            priceChangePercent24h: priceChange,
-            exchange: 'coinbase',
-          });
-        } catch {
-          // Skip failed individual requests
-        }
-      })
-    );
-    
-    return tickers.filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
-  } catch (error: any) {
-    console.error('[Coinbase Client] Error:', error.message);
     return [];
   }
 }
@@ -350,7 +303,6 @@ const exchangeFetchers: Record<ExchangeName, () => Promise<SimpleTicker[]>> = {
   bybit: fetchBybitTickers,
   okx: fetchOkxTickers,
   gateio: fetchGateioTickers,
-  coinbase: fetchCoinbaseTickers,
   hyperliquid: fetchHyperliquidTickers,
   aster: fetchAsterTickers,
 };
