@@ -251,12 +251,22 @@ export async function fetchHyperliquidTickers(): Promise<SimpleTicker[]> {
           const ctx = spotCtxs[index];
           if (!ctx) return;
           
-          const price = parseFloat(ctx.midPx || ctx.markPx || '0');
+          // Use markPx as primary (more stable), fallback to midPx
+          const price = parseFloat(ctx.markPx || '0');
           if (price <= 0) return;
           
           const prevDayPx = parseFloat(ctx.prevDayPx || '0');
-          const priceChange = prevDayPx > 0 ? ((price - prevDayPx) / prevDayPx) * 100 : 0;
           const volume = parseFloat(ctx.dayNtlVlm || '0');
+          
+          // Calculate price change - cap at reasonable values to filter bad data
+          let priceChange = 0;
+          if (prevDayPx > 0) {
+            priceChange = ((price - prevDayPx) / prevDayPx) * 100;
+            // Filter out tokens with unrealistic price changes (likely bad data or very illiquid)
+            if (Math.abs(priceChange) > 500) {
+              priceChange = 0; // Reset to 0 for display purposes
+            }
+          }
           
           // Get base token name from tokens array
           const baseTokenIndex = pair.tokens[0];
