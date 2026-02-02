@@ -251,21 +251,25 @@ export async function fetchHyperliquidTickers(): Promise<SimpleTicker[]> {
           const ctx = spotCtxs[index];
           if (!ctx) return;
           
-          // Use markPx as primary (more stable), fallback to midPx
+          // Use markPx as primary (more stable)
           const price = parseFloat(ctx.markPx || '0');
           if (price <= 0) return;
           
           const prevDayPx = parseFloat(ctx.prevDayPx || '0');
           const volume = parseFloat(ctx.dayNtlVlm || '0');
           
-          // Calculate price change - cap at reasonable values to filter bad data
+          // Filter out tokens that aren't actually tradeable on Hyperliquid
+          // The API returns 400+ HIP-1 tokens but only ~50-60 are real trading pairs
+          // Real pairs have trading volume; phantom entries have 0
+          if (volume <= 0) return;
+          
+          // Calculate price change
           let priceChange = 0;
-          if (prevDayPx > 0) {
+          if (prevDayPx > 0 && price > 0) {
             priceChange = ((price - prevDayPx) / prevDayPx) * 100;
-            // Filter out tokens with unrealistic price changes (likely bad data or very illiquid)
-            if (Math.abs(priceChange) > 500) {
-              priceChange = 0; // Reset to 0 for display purposes
-            }
+            // Cap extreme percentages (likely stale prevDayPx data)
+            if (priceChange > 200) priceChange = 200;
+            if (priceChange < -90) priceChange = -90;
           }
           
           // Get base token name from tokens array
