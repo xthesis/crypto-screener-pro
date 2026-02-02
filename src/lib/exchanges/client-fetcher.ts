@@ -337,7 +337,6 @@ const TIMEFRAME_MAP: Record<ExchangeName, Record<Timeframe, string>> = {
   bybit: { '15m': '15', '1h': '60', '4h': '240', '1d': 'D', '1w': 'W' },
   okx: { '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W' },
   gateio: { '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1d', '1w': '1w' },
-  coinbase: { '15m': '900', '1h': '3600', '4h': '14400', '1d': '86400', '1w': '604800' },
   hyperliquid: { '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1d', '1w': '1w' },
   aster: { '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1d', '1w': '1w' },
 };
