@@ -8,14 +8,9 @@ interface Coin {
   id: string;
   symbol: string;
   name: string;
-  image: string;
   current_price: number;
-  market_cap: number;
-  market_cap_rank: number;
   total_volume: number;
   price_change_percentage_24h: number;
-  rsi_14?: number;
-  volume_ratio?: number;
 }
 
 const SAVED_FORMULAS = [
@@ -27,20 +22,15 @@ const SAVED_FORMULAS = [
 // All exchanges enabled by default
 const ALL_EXCHANGES: ExchangeName[] = ['binance', 'bybit', 'okx', 'gateio', 'hyperliquid'];
 
-// Convert SimpleTicker to Coin format for compatibility
+// Convert SimpleTicker to Coin format
 function tickerToCoin(ticker: SimpleTicker): Coin {
   return {
     id: `${ticker.exchange}-${ticker.symbol}`,
     symbol: ticker.base,
     name: ticker.base,
-    image: '',
     current_price: ticker.price,
-    market_cap: 0,
-    market_cap_rank: 0,
     total_volume: ticker.volume24h,
     price_change_percentage_24h: ticker.priceChangePercent24h,
-    rsi_14: undefined,
-    volume_ratio: undefined,
   };
 }
 
@@ -54,13 +44,12 @@ export default function Dashboard() {
     try {
       const tickers = await fetchAllExchanges(ALL_EXCHANGES);
       
-      // Aggregate by base symbol (combine same coin from different exchanges)
+      // Aggregate by base symbol
       const aggregated = new Map<string, Coin>();
       
       tickers.forEach(ticker => {
         const existing = aggregated.get(ticker.base);
         if (existing) {
-          // Average the prices and sum volumes
           existing.current_price = (existing.current_price + ticker.price) / 2;
           existing.total_volume += ticker.volume24h;
           existing.price_change_percentage_24h = (existing.price_change_percentage_24h + ticker.priceChangePercent24h) / 2;
@@ -83,8 +72,10 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [fetchCoins]);
 
-  const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 5);
-  const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 5);
+  const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 10);
+  const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 10);
+  const highestVolume = [...coins].sort((a, b) => b.total_volume - a.total_volume).slice(0, 10);
+  const lowestVolume = [...coins].sort((a, b) => a.total_volume - b.total_volume).slice(0, 10);
 
   const runFormula = async (f: typeof SAVED_FORMULAS[0]) => {
     setRunningFormula(f.id);
@@ -98,20 +89,32 @@ export default function Dashboard() {
     }
   };
 
-  const Skel = ({ h = 20, w = '100%' }: { h?: number; w?: string }) => (
-    <div className="skeleton" style={{ height: h, width: w }}></div>
+  const Skel = ({ h = 20 }: { h?: number }) => (
+    <div className="skeleton" style={{ height: h, width: '100%' }}></div>
   );
 
-  const CoinRow = ({ c }: { c: Coin }) => (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        <div>
-          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f0f2f5' }}>{c.symbol.toUpperCase()}</div>
-          <div style={{ fontSize: '0.6875rem', color: '#545b66' }}>${c.current_price.toLocaleString(undefined, { maximumFractionDigits: 6 })}</div>
-        </div>
+  const CoinRowChange = ({ c }: { c: Coin }) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      <div>
+        <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f0f2f5' }}>{c.symbol}</div>
+        <div style={{ fontSize: '0.65rem', color: '#545b66' }}>${c.current_price.toLocaleString(undefined, { maximumFractionDigits: 6 })}</div>
       </div>
-      <span className="mono" style={{ color: c.price_change_percentage_24h >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>
+      <span style={{ color: c.price_change_percentage_24h >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600, fontSize: '0.8rem' }}>
         {c.price_change_percentage_24h >= 0 ? '+' : ''}{c.price_change_percentage_24h.toFixed(2)}%
+      </span>
+    </div>
+  );
+
+  const CoinRowVolume = ({ c }: { c: Coin }) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      <div>
+        <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f0f2f5' }}>{c.symbol}</div>
+        <div style={{ fontSize: '0.65rem', color: '#545b66' }}>${c.current_price.toLocaleString(undefined, { maximumFractionDigits: 6 })}</div>
+      </div>
+      <span style={{ color: '#4f8cff', fontWeight: 600, fontSize: '0.75rem' }}>
+        ${c.total_volume >= 1000000000 ? (c.total_volume / 1000000000).toFixed(2) + 'B' : 
+          c.total_volume >= 1000000 ? (c.total_volume / 1000000).toFixed(2) + 'M' : 
+          (c.total_volume / 1000).toFixed(0) + 'K'}
       </span>
     </div>
   );
@@ -132,11 +135,9 @@ export default function Dashboard() {
 
       <div className="page-shell">
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>Dashboard</h1>
-            <p style={{ fontSize: '0.75rem', color: '#545b66' }}>{loading ? 'Fetching from all exchanges…' : `${coins.length} coins tracked · auto-refreshes every 30s`}</p>
-          </div>
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>Dashboard</h1>
+          <p style={{ fontSize: '0.75rem', color: '#545b66' }}>{loading ? 'Fetching from all exchanges…' : `${coins.length} coins tracked · auto-refreshes every 30s`}</p>
         </div>
 
         {/* Stats row */}
@@ -154,31 +155,71 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* 2-col panels */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '0.75rem', marginBottom: '1.75rem' }}>
-          {[
-            { title: 'Top Gainers', color: '#00c878', data: topGainers, icon: '▲' },
-            { title: 'Top Losers', color: '#ff4d4d', data: topLosers, icon: '▼' },
-          ].map(panel => (
-            <div key={panel.title} className="card" style={{ padding: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                <span style={{ fontSize: '0.7rem', color: panel.color }}>{panel.icon}</span>
-                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: panel.color, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{panel.title}</span>
-                <span style={{ fontSize: '0.625rem', color: '#545b66', marginLeft: 'auto' }}>24h</span>
-              </div>
-              {loading ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <Skel h={28} /><Skel h={28} /><Skel h={28} /><Skel h={28} />
-                </div>
-              ) : panel.data.length === 0 ? (
-                <p style={{ fontSize: '0.75rem', color: '#545b66', padding: '1rem 0' }}>Nothing here right now</p>
-              ) : (
-                <div>
-                  {panel.data.map(c => <CoinRow key={c.id} c={c} />)}
-                </div>
-              )}
+        {/* 4 panels - 2x2 grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem', marginBottom: '1.75rem' }}>
+          {/* Top Gainers */}
+          <div className="card" style={{ padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.7rem', color: '#00c878' }}>▲</span>
+              <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#00c878', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Top 10 Gainers</span>
+              <span style={{ fontSize: '0.625rem', color: '#545b66', marginLeft: 'auto' }}>24h</span>
             </div>
-          ))}
+            {loading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[...Array(5)].map((_, i) => <Skel key={i} h={36} />)}
+              </div>
+            ) : (
+              <div>{topGainers.map(c => <CoinRowChange key={c.id} c={c} />)}</div>
+            )}
+          </div>
+
+          {/* Top Losers */}
+          <div className="card" style={{ padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.7rem', color: '#ff4d4d' }}>▼</span>
+              <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#ff4d4d', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Top 10 Losers</span>
+              <span style={{ fontSize: '0.625rem', color: '#545b66', marginLeft: 'auto' }}>24h</span>
+            </div>
+            {loading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[...Array(5)].map((_, i) => <Skel key={i} h={36} />)}
+              </div>
+            ) : (
+              <div>{topLosers.map(c => <CoinRowChange key={c.id} c={c} />)}</div>
+            )}
+          </div>
+
+          {/* Highest Volume */}
+          <div className="card" style={{ padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.7rem', color: '#4f8cff' }}>◆</span>
+              <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#4f8cff', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Highest Volume</span>
+              <span style={{ fontSize: '0.625rem', color: '#545b66', marginLeft: 'auto' }}>24h</span>
+            </div>
+            {loading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[...Array(5)].map((_, i) => <Skel key={i} h={36} />)}
+              </div>
+            ) : (
+              <div>{highestVolume.map(c => <CoinRowVolume key={c.id} c={c} />)}</div>
+            )}
+          </div>
+
+          {/* Lowest Volume */}
+          <div className="card" style={{ padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.7rem', color: '#f59e0b' }}>◇</span>
+              <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Lowest Volume</span>
+              <span style={{ fontSize: '0.625rem', color: '#545b66', marginLeft: 'auto' }}>24h</span>
+            </div>
+            {loading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[...Array(5)].map((_, i) => <Skel key={i} h={36} />)}
+              </div>
+            ) : (
+              <div>{lowestVolume.map(c => <CoinRowVolume key={c.id} c={c} />)}</div>
+            )}
+          </div>
         </div>
 
         {/* Formulas section */}
@@ -200,7 +241,7 @@ export default function Dashboard() {
               )}
               {formulaResults[f.id] && formulaResults[f.id].length > 0 && (
                 <div style={{ marginBottom: '0.75rem' }}>
-                  {formulaResults[f.id].slice(0, 3).map(c => <CoinRow key={c.id} c={c} badge="change" />)}
+                  {formulaResults[f.id].slice(0, 3).map(c => <CoinRowChange key={c.id} c={c} />)}
                 </div>
               )}
 
