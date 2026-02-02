@@ -14,6 +14,9 @@ export interface SimpleTicker {
 export type ExchangeName = 'binance' | 'bybit' | 'okx' | 'gateio' | 'coinbase' | 'hyperliquid' | 'aster';
 export type Timeframe = '15m' | '1h' | '4h' | '1d' | '1w';
 
+// Minimum 24h volume in USD to filter out illiquid/dead tokens
+const MIN_VOLUME_USD = 20000;
+
 // Binance client-side fetch
 export async function fetchBinanceTickers(): Promise<SimpleTicker[]> {
   try {
@@ -32,7 +35,8 @@ export async function fetchBinanceTickers(): Promise<SimpleTicker[]> {
         volume24h: parseFloat(t.volume) * parseFloat(t.lastPrice),
         priceChangePercent24h: parseFloat(t.priceChangePercent),
         exchange: 'binance',
-      }));
+      }))
+      .filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
   } catch (error: any) {
     console.error('[Binance Client] Error:', error.message);
     return [];
@@ -64,7 +68,8 @@ export async function fetchBybitTickers(): Promise<SimpleTicker[]> {
           priceChangePercent24h: priceChange,
           exchange: 'bybit',
         };
-      });
+      })
+      .filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
   } catch (error: any) {
     console.error('[Bybit Client] Error:', error.message);
     return [];
@@ -97,7 +102,8 @@ export async function fetchOkxTickers(): Promise<SimpleTicker[]> {
           priceChangePercent24h: priceChange,
           exchange: 'okx',
         };
-      });
+      })
+      .filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
   } catch (error: any) {
     console.error('[OKX Client] Error:', error.message);
     return [];
@@ -126,7 +132,8 @@ export async function fetchGateioTickers(): Promise<SimpleTicker[]> {
           priceChangePercent24h: parseFloat(t.change_percentage),
           exchange: 'gateio',
         };
-      });
+      })
+      .filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
   } catch (error: any) {
     console.error('[Gate.io Client] Error:', error.message);
     return [];
@@ -173,7 +180,7 @@ export async function fetchCoinbaseTickers(): Promise<SimpleTicker[]> {
       })
     );
     
-    return tickers;
+    return tickers.filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
   } catch (error: any) {
     console.error('[Coinbase Client] Error:', error.message);
     return [];
@@ -210,6 +217,9 @@ export async function fetchHyperliquidTickers(): Promise<SimpleTicker[]> {
           const prevDayPx = parseFloat(ctx.prevDayPx || '0');
           const priceChange = prevDayPx > 0 ? ((price - prevDayPx) / prevDayPx) * 100 : 0;
           const volume = parseFloat(ctx.dayNtlVlm || '0');
+          
+          // Apply minimum volume filter
+          if (volume < MIN_VOLUME_USD) return;
           
           tickers.push({
             symbol: coin.name + 'USDT',
@@ -260,8 +270,8 @@ export async function fetchHyperliquidTickers(): Promise<SimpleTicker[]> {
           
           // Filter out tokens that aren't actually tradeable on Hyperliquid
           // The API returns 400+ HIP-1 tokens but only ~50-60 are real trading pairs
-          // Real pairs have trading volume; phantom entries have 0
-          if (volume <= 0) return;
+          // Only show tokens with meaningful volume
+          if (volume < MIN_VOLUME_USD) return;
           
           // Calculate price change
           let priceChange = 0;
@@ -325,7 +335,8 @@ export async function fetchAsterTickers(): Promise<SimpleTicker[]> {
         volume24h: parseFloat(t.volume24h || t.quoteVolume || 0),
         priceChangePercent24h: parseFloat(t.priceChange24h || 0),
         exchange: 'aster',
-      }));
+      }))
+      .filter((t: SimpleTicker) => t.volume24h >= MIN_VOLUME_USD);
   } catch (error: any) {
     console.error('[Aster Client] Error:', error.message);
     // Return empty array - Aster may not be available yet
