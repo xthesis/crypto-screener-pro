@@ -2,19 +2,37 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { fetchAllExchanges, SimpleTicker } from '@/lib/exchanges/client-fetcher';
-
-type ExchangeName = 'binance' | 'bybit';
+import { fetchAllExchanges, SimpleTicker, ExchangeName, Timeframe } from '@/lib/exchanges/client-fetcher';
 
 const EXCHANGE_LABELS: Record<ExchangeName, string> = {
   binance: 'Binance',
   bybit: 'Bybit',
+  okx: 'OKX',
+  gateio: 'Gate.io',
+  coinbase: 'Coinbase',
+  hyperliquid: 'Hyperliquid',
+  aster: 'Aster',
 };
 
 const EXCHANGE_EMOJIS: Record<ExchangeName, string> = {
   binance: '🅱️',
   bybit: '🇧',
+  okx: '🅾️',
+  gateio: '🚪',
+  coinbase: '🪙',
+  hyperliquid: '💧',
+  aster: '⭐',
 };
+
+const TIMEFRAMES: { value: Timeframe; label: string }[] = [
+  { value: '15m', label: '15m' },
+  { value: '1h', label: '1H' },
+  { value: '4h', label: '4H' },
+  { value: '1d', label: '1D' },
+  { value: '1w', label: '1W' },
+];
+
+const ALL_EXCHANGES: ExchangeName[] = ['binance', 'bybit', 'okx', 'gateio', 'coinbase', 'hyperliquid', 'aster'];
 
 function fmtPrice(v: number) {
   if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
@@ -38,6 +56,7 @@ export default function Screener() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [selectedExchanges, setSelectedExchanges] = useState<ExchangeName[]>(['binance', 'bybit']);
+  const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1d');
   const [sortField, setSortField] = useState<'price' | 'volume24h' | 'priceChangePercent24h'>('volume24h');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [lastUpdated, setLastUpdated] = useState('');
@@ -78,6 +97,14 @@ export default function Screener() {
     );
   };
 
+  const selectAllExchanges = () => {
+    setSelectedExchanges([...ALL_EXCHANGES]);
+  };
+
+  const deselectAllExchanges = () => {
+    setSelectedExchanges([]);
+  };
+
   const handleSort = (field: typeof sortField) => {
     if (sortField === field) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -109,7 +136,7 @@ export default function Screener() {
       avgPrice,
       totalVolume,
       avgChange,
-      exchanges: tickerList.map(t => t.exchange),
+      exchanges: tickerList.map(t => t.exchange as ExchangeName),
       tickers: tickerList,
     };
   });
@@ -179,15 +206,75 @@ export default function Screener() {
           </div>
         </div>
 
+        {/* Timeframe Selector */}
+        <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#8b9099', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Timeframe:</span>
+            <div style={{ display: 'flex', gap: '0.25rem' }}>
+              {TIMEFRAMES.map(tf => (
+                <button
+                  key={tf.value}
+                  onClick={() => setSelectedTimeframe(tf.value)}
+                  style={{
+                    padding: '0.35rem 0.65rem',
+                    borderRadius: 6,
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    background: selectedTimeframe === tf.value ? 'rgba(79,140,255,0.15)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${selectedTimeframe === tf.value ? 'rgba(79,140,255,0.4)' : 'rgba(255,255,255,0.06)'}`,
+                    color: selectedTimeframe === tf.value ? '#4f8cff' : '#8b9099',
+                  }}
+                >
+                  {tf.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Exchange Selector */}
         <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#8b9099', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Exchanges:</span>
-            {Object.entries(EXCHANGE_LABELS).map(([key, label]) => {
-              const exchangeKey = key as ExchangeName;
+            <div style={{ display: 'flex', gap: '0.35rem', marginRight: '0.5rem' }}>
+              <button
+                onClick={selectAllExchanges}
+                style={{
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: 4,
+                  fontSize: '0.65rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  background: 'rgba(79,140,255,0.08)',
+                  border: '1px solid rgba(79,140,255,0.2)',
+                  color: '#4f8cff',
+                }}
+              >
+                All
+              </button>
+              <button
+                onClick={deselectAllExchanges}
+                style={{
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: 4,
+                  fontSize: '0.65rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: '#8b9099',
+                }}
+              >
+                None
+              </button>
+            </div>
+            {ALL_EXCHANGES.map(exchangeKey => {
               const isSelected = selectedExchanges.includes(exchangeKey);
               return (
                 <label
-                  key={key}
+                  key={exchangeKey}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -207,7 +294,7 @@ export default function Screener() {
                     style={{ width: 14, height: 14 }}
                   />
                   <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>
-                    {EXCHANGE_EMOJIS[exchangeKey]} {label}
+                    {EXCHANGE_EMOJIS[exchangeKey]} {EXCHANGE_LABELS[exchangeKey]}
                   </span>
                 </label>
               );
@@ -215,6 +302,7 @@ export default function Screener() {
           </div>
         </div>
 
+        {/* Search */}
         <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
           <input
             type="text"
@@ -264,10 +352,10 @@ export default function Screener() {
                         </div>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: '0.25rem' }}>
+                        <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                           {coin.exchanges.map((ex, i) => (
-                            <span key={i} title={EXCHANGE_LABELS[ex as ExchangeName]} style={{ fontSize: '0.9rem' }}>
-                              {EXCHANGE_EMOJIS[ex as ExchangeName]}
+                            <span key={i} title={EXCHANGE_LABELS[ex]} style={{ fontSize: '0.9rem' }}>
+                              {EXCHANGE_EMOJIS[ex]}
                             </span>
                           ))}
                         </div>
@@ -292,6 +380,16 @@ export default function Screener() {
               </table>
             </div>
           )}
+        </div>
+
+        {/* Exchange Status Footer */}
+        <div style={{ marginTop: '1rem', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.04)' }}>
+          <div style={{ fontSize: '0.65rem', color: '#545b66', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            <span>✅ Binance, Bybit, OKX, Gate.io working</span>
+            <span>⚠️ Coinbase: rate limited (50 pairs)</span>
+            <span>🔄 Hyperliquid: perpetuals only</span>
+            <span>🆕 Aster: coming soon</span>
+          </div>
         </div>
       </div>
     </div>
