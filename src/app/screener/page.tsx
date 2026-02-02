@@ -3,21 +3,45 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 
-interface Coin {
+interface UnifiedCoin {
   id: string;
-  symbol: string;
-  name: string;
-  image: string;
-  current_price: number;
-  market_cap: number;
-  market_cap_rank: number;
-  total_volume: number;
-  price_change_percentage_24h: number;
-  price_change_percentage_7d?: number;
-  price_change_percentage_30d?: number;
-  rsi_14?: number;
-  volume_ratio?: number;
+  base: string;
+  quote: string;
+  exchanges: {
+    binance?: ExchangeData;
+    bybit?: ExchangeData;
+  };
+  aggregated: {
+    avgPrice: number;
+    totalVolume: number;
+    avgPriceChange24h: number;
+    bestBid: { exchange: string; price: number } | null;
+    bestAsk: { exchange: string; price: number } | null;
+  };
 }
+
+interface ExchangeData {
+  symbol: string;
+  price: number;
+  volume24h: number;
+  priceChange24h: number;
+  priceChangePercent24h: number;
+  high24h: number;
+  low24h: number;
+  lastUpdated: number;
+}
+
+type ExchangeName = 'binance' | 'bybit';
+
+const EXCHANGE_LABELS: Record<ExchangeName, string> = {
+  binance: 'Binance',
+  bybit: 'Bybit',
+};
+
+const EXCHANGE_EMOJIS: Record<ExchangeName, string> = {
+  binance: '🅱️',
+  bybit: '🇧',
+};
 
 function fmtPrice(v: number) {
   if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
@@ -26,6 +50,7 @@ function fmtPrice(v: number) {
   if (v >= 0.01) return '$' + v.toFixed(4);
   return '$' + v.toFixed(8);
 }
+
 function fmtBig(v: number) {
   if (v >= 1e12) return '$' + (v / 1e12).toFixed(2) + 'T';
   if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
@@ -35,32 +60,53 @@ function fmtBig(v: number) {
 }
 
 export default function Screener() {
-  const [coins, setCoins] = useState<Coin[]>([]);
+  const [coins, setCoins] = useState<UnifiedCoin[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [mcapFilter, setMcapFilter] = useState('all');
-  const [rsiFilter, setRsiFilter] = useState('all');
-  const [sortField, setSortField] = useState('market_cap_rank');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [selectedExchanges, setSelectedExchanges] = useState<ExchangeName[]>(['binance', 'bybit']);
+  const [sortField, setSortField] = useState('aggregated.avgPrice');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [lastUpdated, setLastUpdated] = useState('');
-
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchCoins = useCallback(async (bust = false) => {
     setError(null);
     if (bust) setRefreshing(true);
     try {
-      const res = await fetch(bust ? '/api/coins?bust=1' : '/api/coins');
-      console.log('[FETCH]', { bust, serverTime: res.headers.get('X-Server-Time'), cacheBusted: res.headers.get('X-Cache-Busted') });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
-      const data = await res.json();
-      console.log('[DATA]', { count: data.length, btcPrice: data.find((c: any) => c.symbol === 'BTC')?.current_price });
+      const exchangesParam = selectedExchanges.join(',');
+      const url = bust 
+        ? `/api/coins?bust=1&exchanges=${exchangesParam}`
+        : `/api/coins?exchanges=${exchangesParam}`;
+      
+      const res = await fetch(url);
+      console.log('[FETCH]', { 
+        bust, 
+        exchanges: res.headers.get('X-Exchanges'),
+        coinCount: res.headers.get('X-Coin-Count'),
+        serverTime: res.headers.get('X-Server-Time'),
+      });
+      
+      if (!res.ok) { 
+        const d = await res.json(); 
+        throw new Error(d.error || 'Failed'); 
+      }
+      
+      const data: UnifiedCoin[] = await res.json();
+      console.log('[DATA]', { 
+        count: data.length, 
+        btcPrice: data.find(c => c.base === 'BTC')?.aggregated.avgPrice 
+      });
+      
       setCoins(data);
       setLastUpdated(new Date().toLocaleTimeString());
-    } catch (e: any) { setError(e.message); }
-    finally { setLoading(false); setRefreshing(false); }
-  }, []);
+    } catch (e: any) { 
+      setError(e.message); 
+    } finally { 
+      setLoading(false); 
+      setRefreshing(false); 
+    }
+  }, [selectedExchanges]);
 
   useEffect(() => {
     fetchCoins();
@@ -68,33 +114,54 @@ export default function Screener() {
     return () => clearInterval(iv);
   }, [fetchCoins]);
 
-  const handleSort = (field: string) => {
-    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortField(field); setSortDir(field === 'market_cap_rank' ? 'asc' : 'desc'); }
+  const toggleExchange = (exchange: ExchangeName) => {
+    setSelectedExchanges(prev => 
+      prev.includes(exchange)
+        ? prev.filter(e => e !== exchange)
+        : [...prev, exchange]
+    );
   };
 
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir('desc');
+    }
+  };
+
+  // Filter coins
   let filtered = coins.filter(c => {
-    if (search && !c.symbol.toLowerCase().includes(search.toLowerCase()) && !c.name.toLowerCase().includes(search.toLowerCase())) return false;
-    if (mcapFilter === 'large' && c.market_cap < 1e10) return false;
-    if (mcapFilter === 'mid' && (c.market_cap < 1e9 || c.market_cap >= 1e10)) return false;
-    if (mcapFilter === 'small' && c.market_cap >= 1e9) return false;
-    const rsi = c.rsi_14 ?? 50;
-    if (rsiFilter === 'oversold' && rsi >= 30) return false;
-    if (rsiFilter === 'neutral' && (rsi < 30 || rsi > 70)) return false;
-    if (rsiFilter === 'overbought' && rsi <= 70) return false;
+    // Search filter
+    if (search && !c.base.toLowerCase().includes(search.toLowerCase()) && !c.id.toLowerCase().includes(search.toLowerCase())) {
+      return false;
+    }
     return true;
   });
 
+  // Sort coins
   filtered.sort((a, b) => {
     let vA: number, vB: number;
+    
     switch (sortField) {
-      case 'current_price': vA = a.current_price; vB = b.current_price; break;
-      case 'price_change_percentage_24h': vA = a.price_change_percentage_24h; vB = b.price_change_percentage_24h; break;
-      case 'total_volume': vA = a.total_volume; vB = b.total_volume; break;
-      case 'market_cap': vA = a.market_cap; vB = b.market_cap; break;
-      case 'rsi_14': vA = a.rsi_14 ?? 50; vB = b.rsi_14 ?? 50; break;
-      default: vA = a.market_cap_rank; vB = b.market_cap_rank;
+      case 'aggregated.avgPrice':
+        vA = a.aggregated.avgPrice;
+        vB = b.aggregated.avgPrice;
+        break;
+      case 'aggregated.totalVolume':
+        vA = a.aggregated.totalVolume;
+        vB = b.aggregated.totalVolume;
+        break;
+      case 'aggregated.avgPriceChange24h':
+        vA = a.aggregated.avgPriceChange24h;
+        vB = b.aggregated.avgPriceChange24h;
+        break;
+      default:
+        vA = a.aggregated.totalVolume;
+        vB = b.aggregated.totalVolume;
     }
+    
     return sortDir === 'asc' ? vA - vB : vB - vA;
   });
 
@@ -103,16 +170,6 @@ export default function Screener() {
       {sortField === field ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
     </span>
   );
-
-  const cols = [
-    { key: 'market_cap_rank', label: '#', align: 'left' as const, sortable: false },
-    { key: 'coin', label: 'Coin', align: 'left' as const, sortable: false },
-    { key: 'current_price', label: 'Price', align: 'right' as const, sortable: true },
-    { key: 'price_change_percentage_24h', label: '24h', align: 'right' as const, sortable: true },
-    { key: 'total_volume', label: 'Volume', align: 'right' as const, sortable: true },
-    { key: 'market_cap', label: 'Mkt Cap', align: 'right' as const, sortable: true },
-    { key: 'rsi_14', label: 'RSI', align: 'right' as const, sortable: true },
-  ];
 
   return (
     <div style={{ minHeight: '100vh' }}>
@@ -132,14 +189,14 @@ export default function Screener() {
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>Live Screener</h1>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>Multi-Exchange Screener</h1>
             <p style={{ fontSize: '0.6875rem', color: '#545b66' }}>
-              {loading ? 'Fetching…' : `${filtered.length} of ${coins.length} coins · Updated ${lastUpdated}`}
+              {loading ? 'Fetching…' : `${filtered.length} pairs across ${selectedExchanges.length} exchanges · Updated ${lastUpdated}`}
               <span style={{ color: '#4f8cff', marginLeft: '0.5rem' }}>● auto</span>
             </p>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <button onClick={() => fetchCoins(true)} className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }} disabled={refreshing}>
+            <button onClick={() => fetchCoins(true)} className="btn btn-ghost" style={{ fontSize: '0.85rem', padding: '0.5rem 0.75rem', minWidth: 36, minHeight: 36 }}>
               {refreshing ? '…' : '↻'}
             </button>
             <Link href="/formula/new" className="btn btn-primary" style={{ fontSize: '0.7rem', padding: '0.35rem 0.75rem' }}>
@@ -148,27 +205,52 @@ export default function Screener() {
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Exchange Selector */}
+        <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#8b9099', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Exchanges:</span>
+            {Object.entries(EXCHANGE_LABELS).map(([key, label]) => {
+              const exchangeKey = key as ExchangeName;
+              const isSelected = selectedExchanges.includes(exchangeKey);
+              return (
+                <label 
+                  key={key}
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '0.4rem', 
+                    cursor: 'pointer',
+                    padding: '0.3rem 0.6rem',
+                    borderRadius: 6,
+                    background: isSelected ? 'rgba(79,140,255,0.12)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${isSelected ? 'rgba(79,140,255,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleExchange(exchangeKey)}
+                    style={{ width: 14, height: 14 }}
+                  />
+                  <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>
+                    {EXCHANGE_EMOJIS[exchangeKey]} {label}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Search */}
+        <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
           <input
             type="text"
-            placeholder="Search…"
+            placeholder="Search by symbol (BTC, ETH, SOL...)"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            style={{ flex: '1 1 160px', maxWidth: 220 }}
+            style={{ width: '100%', maxWidth: 320 }}
           />
-          <select value={mcapFilter} onChange={e => setMcapFilter(e.target.value)} style={{ flex: '0 0 auto', width: 160 }}>
-            <option value="all">All Market Caps</option>
-            <option value="large">Large (&gt;$10B)</option>
-            <option value="mid">Mid ($1B–$10B)</option>
-            <option value="small">Small (&lt;$1B)</option>
-          </select>
-          <select value={rsiFilter} onChange={e => setRsiFilter(e.target.value)} style={{ flex: '0 0 auto', width: 155 }}>
-            <option value="all">All RSI</option>
-            <option value="oversold">Oversold (&lt;30)</option>
-            <option value="neutral">Neutral (30–70)</option>
-            <option value="overbought">Overbought (&gt;70)</option>
-          </select>
         </div>
 
         {/* Error */}
@@ -190,57 +272,67 @@ export default function Screener() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    {cols.map(col => (
-                      <th
-                        key={col.key}
-                        style={{ textAlign: col.align, cursor: col.sortable ? 'pointer' : 'default', userSelect: 'none' }}
-                        onClick={() => col.sortable && handleSort(col.key)}
-                      >
-                        {col.label}{col.sortable && <SortIcon field={col.key} />}
-                      </th>
-                    ))}
+                    <th style={{ textAlign: 'left' }}>Symbol</th>
+                    <th style={{ textAlign: 'left' }}>Exchanges</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('aggregated.avgPrice')}>
+                      Avg Price<SortIcon field="aggregated.avgPrice" />
+                    </th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('aggregated.avgPriceChange24h')}>
+                      24h<SortIcon field="aggregated.avgPriceChange24h" />
+                    </th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('aggregated.totalVolume')}>
+                      Total Volume<SortIcon field="aggregated.totalVolume" />
+                    </th>
+                    <th style={{ textAlign: 'right' }}>Best Bid</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map(coin => {
-                    const rsi = coin.rsi_14 ?? 50;
-                    const chg = coin.price_change_percentage_24h;
+                    const avgChange = (coin.aggregated.avgPriceChange24h / coin.aggregated.avgPrice) * 100;
+                    const exchanges = Object.keys(coin.exchanges) as ExchangeName[];
+                    
                     return (
                       <tr key={coin.id}>
-                        <td style={{ color: '#545b66', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem' }}>{coin.market_cap_rank}</td>
                         <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                            {coin.image ? (
-                              <img src={coin.image} alt={coin.name} width={26} height={26} style={{ borderRadius: '50%' }} />
-                            ) : (
-                              <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'rgba(79,140,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700, color: '#4f8cff' }}>
-                                {coin.symbol[0]}
-                              </div>
-                            )}
-                            <div>
-                              <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#f0f2f5' }}>{coin.symbol.toUpperCase()}</div>
-                              <div style={{ fontSize: '0.6625rem', color: '#545b66' }}>{coin.name}</div>
-                            </div>
+                          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem', fontWeight: 600, color: '#f0f2f5' }}>
+                            {coin.base}/{coin.quote}
                           </div>
                         </td>
-                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', color: '#f0f2f5' }}>{fmtPrice(coin.current_price)}</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '0.25rem' }}>
+                            {exchanges.map(ex => (
+                              <span key={ex} title={EXCHANGE_LABELS[ex]} style={{ fontSize: '0.9rem' }}>
+                                {EXCHANGE_EMOJIS[ex]}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', color: '#f0f2f5' }}>
+                          {fmtPrice(coin.aggregated.avgPrice)}
+                        </td>
                         <td style={{ textAlign: 'right' }}>
-                          <span style={{ display: 'inline-block', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', fontWeight: 600, padding: '0.2rem 0.45rem', borderRadius: 4, background: chg >= 0 ? 'rgba(0,200,120,0.1)' : 'rgba(255,77,77,0.1)', color: chg >= 0 ? '#00c878' : '#ff4d4d' }}>
-                            {chg >= 0 ? '+' : ''}{chg.toFixed(2)}%
+                          <span style={{ display: 'inline-block', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', fontWeight: 600, padding: '0.2rem 0.45rem', borderRadius: 4, background: avgChange >= 0 ? 'rgba(0,200,120,0.1)' : 'rgba(255,77,77,0.1)', color: avgChange >= 0 ? '#00c878' : '#ff4d4d' }}>
+                            {avgChange >= 0 ? '+' : ''}{avgChange.toFixed(2)}%
                           </span>
                         </td>
-                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>{fmtBig(coin.total_volume)}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>{fmtBig(coin.market_cap)}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          <span className="rsi-pill" style={{ background: rsi < 30 ? 'rgba(0,200,120,0.12)' : rsi > 70 ? 'rgba(255,77,77,0.12)' : 'rgba(139,144,153,0.12)', color: rsi < 30 ? '#00c878' : rsi > 70 ? '#ff4d4d' : '#8b9099' }}>
-                            {rsi.toFixed(0)}
-                          </span>
+                        <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#8b9099' }}>
+                          {fmtBig(coin.aggregated.totalVolume)}
+                        </td>
+                        <td style={{ textAlign: 'right', fontSize: '0.7rem', color: '#8b9099' }}>
+                          {coin.aggregated.bestBid && (
+                            <span>
+                              {fmtPrice(coin.aggregated.bestBid.price)} 
+                              <span style={{ marginLeft: 4, color: '#4f8cff' }}>
+                                {EXCHANGE_EMOJIS[coin.aggregated.bestBid.exchange as ExchangeName]}
+                              </span>
+                            </span>
+                          )}
                         </td>
                       </tr>
                     );
                   })}
                   {filtered.length === 0 && (
-                    <tr><td colSpan={7} style={{ textAlign: 'center', color: '#545b66', padding: '3rem 0', fontSize: '0.8rem' }}>No coins match your filters</td></tr>
+                    <tr><td colSpan={6} style={{ textAlign: 'center', color: '#545b66', padding: '3rem 0', fontSize: '0.8rem' }}>No coins match your filters</td></tr>
                   )}
                 </tbody>
               </table>
