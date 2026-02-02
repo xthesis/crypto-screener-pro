@@ -1,0 +1,17 @@
+name: Update Moving Averages
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  update-mas:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger MA Update
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.APP_URL }}/api/update-mas"
