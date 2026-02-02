@@ -19,9 +19,9 @@ interface Coin {
 }
 
 const SAVED_FORMULAS = [
-  { id: '1', name: 'Oversold Bounce', description: 'RSI < 30', conditions: [{ id: 1, field: 'rsi_14', operator: 'less_than', value: '30', logicalOperator: 'AND' }] },
-  { id: '2', name: 'Top Gainers', description: '24h change > 5%', conditions: [{ id: 1, field: 'change_24h', operator: 'greater_than', value: '5', logicalOperator: 'AND' }] },
-  { id: '3', name: 'Volume Surge', description: 'Volume ratio > 1.5', conditions: [{ id: 1, field: 'volume_ratio', operator: 'greater_than', value: '1.5', logicalOperator: 'AND' }] },
+  { id: '1', name: 'Top Gainers', description: '24h change > 5%', filter: (c: Coin) => c.price_change_percentage_24h > 5 },
+  { id: '2', name: 'Top Losers', description: '24h change < -5%', filter: (c: Coin) => c.price_change_percentage_24h < -5 },
+  { id: '3', name: 'High Volume', description: 'Volume > $1M', filter: (c: Coin) => c.total_volume > 1000000 },
 ];
 
 // All exchanges enabled by default
@@ -83,29 +83,13 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [fetchCoins]);
 
-  const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 4);
-  const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 4);
-  const oversoldCoins = coins.filter(c => (c.rsi_14 ?? 50) < 30).slice(0, 4);
-  const oversoldCount = coins.filter(c => (c.rsi_14 ?? 50) < 30).length;
-  const overboughtCount = coins.filter(c => (c.rsi_14 ?? 50) > 70).length;
+  const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 5);
+  const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 5);
 
   const runFormula = async (f: typeof SAVED_FORMULAS[0]) => {
     setRunningFormula(f.id);
     try {
-      // Run formula client-side instead of API call
-      let results: Coin[] = [];
-      
-      if (f.id === '1') {
-        // Oversold: RSI < 30 (we don't have RSI, so skip)
-        results = coins.filter(c => (c.rsi_14 ?? 50) < 30);
-      } else if (f.id === '2') {
-        // Top Gainers: 24h change > 5%
-        results = coins.filter(c => c.price_change_percentage_24h > 5);
-      } else if (f.id === '3') {
-        // Volume Surge: volume_ratio > 1.5 (we don't have this, so skip)
-        results = coins.filter(c => (c.volume_ratio ?? 1) > 1.5);
-      }
-      
+      const results = coins.filter(f.filter);
       setFormulaResults(prev => ({ ...prev, [f.id]: results }));
     } catch (e) { 
       console.error(e); 
@@ -118,22 +102,17 @@ export default function Dashboard() {
     <div className="skeleton" style={{ height: h, width: w }}></div>
   );
 
-  const CoinRow = ({ c, badge }: { c: Coin; badge?: 'change' | 'rsi' }) => (
+  const CoinRow = ({ c }: { c: Coin }) => (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        {c.image && <img src={c.image} alt={c.name} width={24} height={24} style={{ borderRadius: '50%' }} />}
         <div>
           <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f0f2f5' }}>{c.symbol.toUpperCase()}</div>
           <div style={{ fontSize: '0.6875rem', color: '#545b66' }}>${c.current_price.toLocaleString(undefined, { maximumFractionDigits: 6 })}</div>
         </div>
       </div>
-      {badge === 'rsi' ? (
-        <span className="rsi-pill" style={{ background: 'rgba(0,200,120,0.12)', color: '#00c878' }}>RSI {(c.rsi_14 ?? 50).toFixed(0)}</span>
-      ) : (
-        <span className="mono" style={{ color: c.price_change_percentage_24h >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>
-          {c.price_change_percentage_24h >= 0 ? '+' : ''}{c.price_change_percentage_24h.toFixed(2)}%
-        </span>
-      )}
+      <span className="mono" style={{ color: c.price_change_percentage_24h >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>
+        {c.price_change_percentage_24h >= 0 ? '+' : ''}{c.price_change_percentage_24h.toFixed(2)}%
+      </span>
     </div>
   );
 
@@ -164,8 +143,8 @@ export default function Dashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
           {[
             { label: 'Total Coins', value: loading ? '—' : String(coins.length), color: '#f0f2f5' },
-            { label: 'Oversold', value: loading ? '—' : String(oversoldCount), color: '#00c878' },
-            { label: 'Overbought', value: loading ? '—' : String(overboughtCount), color: '#ff4d4d' },
+            { label: 'Gainers (>5%)', value: loading ? '—' : String(coins.filter(c => c.price_change_percentage_24h > 5).length), color: '#00c878' },
+            { label: 'Losers (<-5%)', value: loading ? '—' : String(coins.filter(c => c.price_change_percentage_24h < -5).length), color: '#ff4d4d' },
             { label: 'Formulas', value: String(SAVED_FORMULAS.length), color: '#4f8cff' },
           ].map(s => (
             <div key={s.label} className="stat-card">
@@ -175,12 +154,11 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* 3-col panels */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.75rem', marginBottom: '1.75rem' }}>
+        {/* 2-col panels */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '0.75rem', marginBottom: '1.75rem' }}>
           {[
-            { title: 'Top Gainers', color: '#00c878', data: topGainers, badge: 'change' as const, icon: '▲' },
-            { title: 'Top Losers', color: '#ff4d4d', data: topLosers, badge: 'change' as const, icon: '▼' },
-            { title: 'Oversold', color: '#f59e0b', data: oversoldCoins, badge: 'rsi' as const, icon: '◐' },
+            { title: 'Top Gainers', color: '#00c878', data: topGainers, icon: '▲' },
+            { title: 'Top Losers', color: '#ff4d4d', data: topLosers, icon: '▼' },
           ].map(panel => (
             <div key={panel.title} className="card" style={{ padding: '1.25rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
@@ -196,7 +174,7 @@ export default function Dashboard() {
                 <p style={{ fontSize: '0.75rem', color: '#545b66', padding: '1rem 0' }}>Nothing here right now</p>
               ) : (
                 <div>
-                  {panel.data.map(c => <CoinRow key={c.id} c={c} badge={panel.badge} />)}
+                  {panel.data.map(c => <CoinRow key={c.id} c={c} />)}
                 </div>
               )}
             </div>
