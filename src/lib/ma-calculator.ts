@@ -3,10 +3,6 @@
 
 import { supabase, CoinRecord } from './supabase';
 
-interface Kline {
-  close: number;
-}
-
 // Fetch daily candles from Binance
 async function fetchBinanceKlines(symbol: string, limit: number = 200): Promise<number[]> {
   try {
@@ -30,24 +26,7 @@ async function fetchBybitKlines(symbol: string, limit: number = 200): Promise<nu
     if (!response.ok) return [];
     const data = await response.json();
     if (!data.result?.list) return [];
-    // Bybit returns newest first, reverse it
-    return data.result.list.reverse().map((k: any) => parseFloat(k[4])); // Close prices
-  } catch {
-    return [];
-  }
-}
-
-// Fetch daily candles from OKX
-async function fetchOkxKlines(symbol: string, limit: number = 200): Promise<number[]> {
-  try {
-    const response = await fetch(
-      `https://www.okx.com/api/v5/market/candles?instId=${symbol}-USDT&bar=1D&limit=${limit}`
-    );
-    if (!response.ok) return [];
-    const data = await response.json();
-    if (!data.data) return [];
-    // OKX returns newest first, reverse it
-    return data.data.reverse().map((k: any) => parseFloat(k[4])); // Close prices
+    return data.result.list.reverse().map((k: any) => parseFloat(k[4]));
   } catch {
     return [];
   }
@@ -63,16 +42,10 @@ function calculateSMA(prices: number[], period: number): number | null {
 
 // Fetch klines for a symbol (tries multiple exchanges)
 async function fetchKlines(symbol: string): Promise<number[]> {
-  // Try Binance first (most reliable)
   let prices = await fetchBinanceKlines(symbol);
-  if (prices.length >= 200) return prices;
+  if (prices.length >= 50) return prices;
 
-  // Try Bybit
   prices = await fetchBybitKlines(symbol);
-  if (prices.length >= 200) return prices;
-
-  // Try OKX
-  prices = await fetchOkxKlines(symbol);
   return prices;
 }
 
@@ -88,7 +61,7 @@ async function getTopCoins(): Promise<{ symbol: string; base: string; exchange: 
       .filter((t: any) => t.symbol.endsWith('USDT'))
       .forEach((t: any) => {
         const volume = parseFloat(t.volume) * parseFloat(t.lastPrice);
-        if (volume >= 100000) { // Min $100k volume
+        if (volume >= 100000) {
           coins.push({
             symbol: t.symbol,
             base: t.symbol.replace('USDT', ''),
@@ -103,37 +76,17 @@ async function getTopCoins(): Promise<{ symbol: string; base: string; exchange: 
     console.error('Binance fetch error:', e);
   }
 
-  // Fetch from Bybit
-  try {
-    const response = await fetch('https://api.bybit.com/v5/market/tickers?category=linear');
-    const data = await response.json();
-    if (data.result?.list) {
-      data.result.list
-        .filter((t: any) => t.symbol.endsWith('USDT'))
-        .forEach((t: any) => {
-          const volume = parseFloat(t.turnover24h);
-          if (volume >= 100000 && !coins.find(c => c.base === t.symbol.replace('USDT', ''))) {
-            coins.push({
-              symbol: t.symbol,
-              base: t.symbol.replace('USDT', ''),
-              exchange: 'bybit',
-              price: parseFloat(t.lastPrice),
-              volume,
-              change: parseFloat(t.price24hPcnt) * 100,
-            });
-          }
-        });
-    }
-  } catch (e) {
-    console.error('Bybit fetch error:', e);
-  }
-
-  // Sort by volume and return top 500
-  return coins.sort((a, b) => b.volume - a.volume).slice(0, 500);
+  // Sort by volume and return top 300
+  return coins.sort((a, b) => b.volume - a.volume).slice(0, 300);
 }
 
 // Main function to update all MAs
 export async function updateAllMAs(): Promise<{ updated: number; errors: number }> {
+  if (!supabase) {
+    console.error('Supabase client not initialized');
+    return { updated: 0, errors: 1 };
+  }
+
   console.log('Starting MA update...');
   
   const coins = await getTopCoins();
@@ -189,7 +142,7 @@ export async function updateAllMAs(): Promise<{ updated: number; errors: number 
 
     // Small delay between batches
     if (i + batchSize < coins.length) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     console.log(`Processed ${Math.min(i + batchSize, coins.length)}/${coins.length} coins`);
