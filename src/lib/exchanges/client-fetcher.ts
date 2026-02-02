@@ -180,60 +180,113 @@ export async function fetchCoinbaseTickers(): Promise<SimpleTicker[]> {
   }
 }
 
-// Hyperliquid client-side fetch
+// Hyperliquid client-side fetch (Perps + Spot)
 export async function fetchHyperliquidTickers(): Promise<SimpleTicker[]> {
+  const tickers: SimpleTicker[] = [];
+  
+  // Fetch PERPS
   try {
-    // Get meta and asset contexts in one call - this has proper names and price data
     const response = await fetch('https://api.hyperliquid.xyz/info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
     });
-    if (!response.ok) throw new Error(`Hyperliquid HTTP ${response.status}`);
     
-    const data = await response.json();
-    const meta = data[0]; // Contains universe with coin names
-    const assetCtxs = data[1]; // Contains price and volume data
-    
-    if (!meta?.universe || !assetCtxs) return [];
-    
-    const tickers: SimpleTicker[] = [];
-    
-    meta.universe.forEach((coin: any, index: number) => {
-      // Skip delisted coins
-      if (coin.isDelisted) return;
+    if (response.ok) {
+      const data = await response.json();
+      const meta = data[0];
+      const assetCtxs = data[1];
       
-      const ctx = assetCtxs[index];
-      if (!ctx) return;
-      
-      const price = parseFloat(ctx.markPx || '0');
-      if (price <= 0) return;
-      
-      // Calculate 24h price change from prevDayPx
-      const prevDayPx = parseFloat(ctx.prevDayPx || '0');
-      const priceChange = prevDayPx > 0 ? ((price - prevDayPx) / prevDayPx) * 100 : 0;
-      
-      // Volume is in notional (USD)
-      const volume = parseFloat(ctx.dayNtlVlm || '0');
-      
-      const symbol = coin.name;
-      
-      tickers.push({
-        symbol: symbol + 'USDT',
-        base: symbol,
-        quote: 'USDT',
-        price,
-        volume24h: volume,
-        priceChangePercent24h: priceChange,
-        exchange: 'hyperliquid',
-      });
+      if (meta?.universe && assetCtxs) {
+        meta.universe.forEach((coin: any, index: number) => {
+          if (coin.isDelisted) return;
+          
+          const ctx = assetCtxs[index];
+          if (!ctx) return;
+          
+          const price = parseFloat(ctx.markPx || '0');
+          if (price <= 0) return;
+          
+          const prevDayPx = parseFloat(ctx.prevDayPx || '0');
+          const priceChange = prevDayPx > 0 ? ((price - prevDayPx) / prevDayPx) * 100 : 0;
+          const volume = parseFloat(ctx.dayNtlVlm || '0');
+          
+          tickers.push({
+            symbol: coin.name + 'USDT',
+            base: coin.name,
+            quote: 'USDT',
+            price,
+            volume24h: volume,
+            priceChangePercent24h: priceChange,
+            exchange: 'hyperliquid',
+          });
+        });
+      }
+    }
+  } catch (error: any) {
+    console.error('[Hyperliquid Perps] Error:', error.message);
+  }
+  
+  // Fetch SPOT
+  try {
+    const response = await fetch('https://api.hyperliquid.xyz/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'spotMetaAndAssetCtxs' }),
     });
     
-    return tickers;
+    if (response.ok) {
+      const data = await response.json();
+      const spotMeta = data[0];
+      const spotCtxs = data[1];
+      
+      if (spotMeta?.tokens && spotMeta?.universe && spotCtxs) {
+        // Create token index to name mapping
+        const tokenMap: Record<number, string> = {};
+        spotMeta.tokens.forEach((token: any) => {
+          tokenMap[token.index] = token.name;
+        });
+        
+        spotMeta.universe.forEach((pair: any, index: number) => {
+          const ctx = spotCtxs[index];
+          if (!ctx) return;
+          
+          const price = parseFloat(ctx.midPx || ctx.markPx || '0');
+          if (price <= 0) return;
+          
+          const prevDayPx = parseFloat(ctx.prevDayPx || '0');
+          const priceChange = prevDayPx > 0 ? ((price - prevDayPx) / prevDayPx) * 100 : 0;
+          const volume = parseFloat(ctx.dayNtlVlm || '0');
+          
+          // Get base token name from tokens array
+          const baseTokenIndex = pair.tokens[0];
+          const quoteTokenIndex = pair.tokens[1];
+          const baseName = tokenMap[baseTokenIndex] || pair.name.split('/')[0] || `@${baseTokenIndex}`;
+          const quoteName = tokenMap[quoteTokenIndex] || 'USDC';
+          
+          // Skip if base name is still an @ symbol (unknown token)
+          if (baseName.startsWith('@')) return;
+          
+          // Skip USDC/USDC or similar
+          if (baseName === quoteName) return;
+          
+          tickers.push({
+            symbol: baseName + quoteName,
+            base: baseName,
+            quote: quoteName,
+            price,
+            volume24h: volume,
+            priceChangePercent24h: priceChange,
+            exchange: 'hyperliquid',
+          });
+        });
+      }
+    }
   } catch (error: any) {
-    console.error('[Hyperliquid Client] Error:', error.message);
-    return [];
+    console.error('[Hyperliquid Spot] Error:', error.message);
   }
+  
+  return tickers;
 }
 
 // Aster (DEX aggregator) - using their public API
