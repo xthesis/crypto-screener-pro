@@ -183,48 +183,40 @@ export async function fetchCoinbaseTickers(): Promise<SimpleTicker[]> {
 // Hyperliquid client-side fetch
 export async function fetchHyperliquidTickers(): Promise<SimpleTicker[]> {
   try {
+    // Get meta and asset contexts in one call - this has proper names and price data
     const response = await fetch('https://api.hyperliquid.xyz/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'allMids' }),
-    });
-    if (!response.ok) throw new Error(`Hyperliquid HTTP ${response.status}`);
-    
-    const mids = await response.json();
-    
-    // Get market data for volume
-    const metaResponse = await fetch('https://api.hyperliquid.xyz/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'meta' }),
-    });
-    
-    let meta: any = { universe: [] };
-    if (metaResponse.ok) {
-      meta = await metaResponse.json();
-    }
-    
-    // Get 24h price changes
-    const ctxResponse = await fetch('https://api.hyperliquid.xyz/info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
     });
+    if (!response.ok) throw new Error(`Hyperliquid HTTP ${response.status}`);
     
-    let assetCtxs: any[] = [];
-    if (ctxResponse.ok) {
-      const ctxData = await ctxResponse.json();
-      assetCtxs = ctxData[1] || [];
-    }
+    const data = await response.json();
+    const meta = data[0]; // Contains universe with coin names
+    const assetCtxs = data[1]; // Contains price and volume data
+    
+    if (!meta?.universe || !assetCtxs) return [];
     
     const tickers: SimpleTicker[] = [];
     
-    Object.entries(mids).forEach(([symbol, midPrice], index) => {
-      const price = parseFloat(midPrice as string);
+    meta.universe.forEach((coin: any, index: number) => {
+      // Skip delisted coins
+      if (coin.isDelisted) return;
+      
       const ctx = assetCtxs[index];
-      const dayPx = ctx?.dayNtlVlm ? parseFloat(ctx.prevDayPx) : price;
-      const priceChange = dayPx > 0 ? ((price - dayPx) / dayPx) * 100 : 0;
-      const volume = ctx?.dayNtlVlm ? parseFloat(ctx.dayNtlVlm) : 0;
+      if (!ctx) return;
+      
+      const price = parseFloat(ctx.markPx || '0');
+      if (price <= 0) return;
+      
+      // Calculate 24h price change from prevDayPx
+      const prevDayPx = parseFloat(ctx.prevDayPx || '0');
+      const priceChange = prevDayPx > 0 ? ((price - prevDayPx) / prevDayPx) * 100 : 0;
+      
+      // Volume is in notional (USD)
+      const volume = parseFloat(ctx.dayNtlVlm || '0');
+      
+      const symbol = coin.name;
       
       tickers.push({
         symbol: symbol + 'USDT',
