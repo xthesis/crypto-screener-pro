@@ -1,0 +1,87 @@
+// src/lib/exchanges/client-fetcher.ts
+// Client-side fetcher that runs in the browser to avoid server IP blocks
+
+export interface SimpleTicker {
+  symbol: string;
+  base: string;
+  quote: string;
+  price: number;
+  volume24h: number;
+  priceChangePercent24h: number;
+  exchange: string;
+}
+
+// Binance client-side fetch
+export async function fetchBinanceTickers(): Promise<SimpleTicker[]> {
+  try {
+    const response = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+    if (!response.ok) throw new Error(`Binance HTTP ${response.status}`);
+    
+    const data = await response.json();
+    
+    return data
+      .filter((t: any) => t.symbol.endsWith('USDT'))
+      .map((t: any) => ({
+        symbol: t.symbol,
+        base: t.symbol.replace('USDT', ''),
+        quote: 'USDT',
+        price: parseFloat(t.lastPrice),
+        volume24h: parseFloat(t.volume) * parseFloat(t.lastPrice),
+        priceChangePercent24h: parseFloat(t.priceChangePercent),
+        exchange: 'binance',
+      }));
+  } catch (error: any) {
+    console.error('[Binance Client] Error:', error.message);
+    return [];
+  }
+}
+
+// Bybit client-side fetch
+export async function fetchBybitTickers(): Promise<SimpleTicker[]> {
+  try {
+    const response = await fetch('https://api.bybit.com/v5/market/tickers?category=linear');
+    if (!response.ok) throw new Error(`Bybit HTTP ${response.status}`);
+    
+    const data = await response.json();
+    
+    if (!data.result?.list) return [];
+    
+    return data.result.list
+      .filter((t: any) => t.symbol.endsWith('USDT'))
+      .map((t: any) => {
+        const price = parseFloat(t.lastPrice);
+        const priceChange = parseFloat(t.price24hPcnt) * 100;
+        
+        return {
+          symbol: t.symbol,
+          base: t.symbol.replace('USDT', ''),
+          quote: 'USDT',
+          price,
+          volume24h: parseFloat(t.turnover24h),
+          priceChangePercent24h: priceChange,
+          exchange: 'bybit',
+        };
+      });
+  } catch (error: any) {
+    console.error('[Bybit Client] Error:', error.message);
+    return [];
+  }
+}
+
+// Fetch from multiple exchanges in parallel
+export async function fetchAllExchanges(
+  exchanges: ('binance' | 'bybit')[] = ['binance', 'bybit']
+): Promise<SimpleTicker[]> {
+  const promises = [];
+  
+  if (exchanges.includes('binance')) {
+    promises.push(fetchBinanceTickers());
+  }
+  
+  if (exchanges.includes('bybit')) {
+    promises.push(fetchBybitTickers());
+  }
+  
+  const results = await Promise.all(promises);
+  return results.flat();
+}
