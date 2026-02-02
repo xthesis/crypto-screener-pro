@@ -17,7 +17,9 @@ class BinanceAPI implements ExchangeAPI {
 
   async fetchAllSymbols(): Promise<string[]> {
     try {
-      const response = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`);
+      const response = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`, {
+        headers: { 'User-Agent': 'crypto-screener-pro/1.0' }
+      });
       return response.data.symbols
         .filter((s: any) => s.status === 'TRADING' && s.quoteAsset === 'USDT')
         .map((s: any) => s.symbol);
@@ -29,7 +31,9 @@ class BinanceAPI implements ExchangeAPI {
 
   async fetchAllTickers(): Promise<Ticker[]> {
     try {
-      const response = await axios.get(`${BASE_URL}/api/v3/ticker/24hr`);
+      const response = await axios.get(`${BASE_URL}/api/v3/ticker/24hr`, {
+        headers: { 'User-Agent': 'crypto-screener-pro/1.0' }
+      });
       
       return response.data
         .filter((t: any) => t.symbol.endsWith('USDT'))

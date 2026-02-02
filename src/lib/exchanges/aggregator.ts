@@ -74,10 +74,12 @@ export async function fetchUnifiedCoins(
   for (const result of results) {
     if (result.status === 'rejected') {
       console.error('[Aggregator] Exchange fetch failed:', result.reason);
+      console.error('[Aggregator] Stack:', result.reason?.stack);
       continue;
     }
 
     const { exchangeName, tickers } = result.value;
+    console.log(`[Aggregator] ${exchangeName}: ${tickers.length} tickers received`);
 
     for (const ticker of tickers) {
       const normalized = AVAILABLE_EXCHANGES[exchangeName].normalizeSymbol(ticker.symbol);

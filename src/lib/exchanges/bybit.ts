@@ -18,9 +18,8 @@ class BybitAPI implements ExchangeAPI {
   async fetchAllSymbols(): Promise<string[]> {
     try {
       const response = await axios.get(`${BASE_URL}/v5/market/instruments-info`, {
-        params: {
-          category: 'linear', // USDT perpetuals
-        },
+        params: { category: 'linear' },
+        headers: { 'User-Agent': 'crypto-screener-pro/1.0' }
       });
       
       return response.data.result.list
@@ -35,9 +34,8 @@ class BybitAPI implements ExchangeAPI {
   async fetchAllTickers(): Promise<Ticker[]> {
     try {
       const response = await axios.get(`${BASE_URL}/v5/market/tickers`, {
-        params: {
-          category: 'linear',
-        },
+        params: { category: 'linear' },
+        headers: { 'User-Agent': 'crypto-screener-pro/1.0' }
       });
 
       return response.data.result.list
