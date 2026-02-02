@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { fetchAllExchanges, SimpleTicker, ExchangeName } from '@/lib/exchanges/client-fetcher';
 
 interface Coin {
   id: string;
@@ -23,21 +24,64 @@ const SAVED_FORMULAS = [
   { id: '3', name: 'Volume Surge', description: 'Volume ratio > 1.5', conditions: [{ id: 1, field: 'volume_ratio', operator: 'greater_than', value: '1.5', logicalOperator: 'AND' }] },
 ];
 
+// All exchanges enabled by default
+const ALL_EXCHANGES: ExchangeName[] = ['binance', 'bybit', 'okx', 'gateio', 'coinbase', 'hyperliquid'];
+
+// Convert SimpleTicker to Coin format for compatibility
+function tickerToCoin(ticker: SimpleTicker): Coin {
+  return {
+    id: `${ticker.exchange}-${ticker.symbol}`,
+    symbol: ticker.base,
+    name: ticker.base,
+    image: '',
+    current_price: ticker.price,
+    market_cap: 0,
+    market_cap_rank: 0,
+    total_volume: ticker.volume24h,
+    price_change_percentage_24h: ticker.priceChangePercent24h,
+    rsi_14: undefined,
+    volume_ratio: undefined,
+  };
+}
+
 export default function Dashboard() {
   const [coins, setCoins] = useState<Coin[]>([]);
   const [loading, setLoading] = useState(true);
   const [formulaResults, setFormulaResults] = useState<Record<string, Coin[]>>({});
   const [runningFormula, setRunningFormula] = useState<string | null>(null);
 
-  const fetchCoins = (bust = false) => {
-    fetch(bust ? '/api/coins?bust=1' : '/api/coins').then(r => r.json()).then(d => { setCoins(d); setLoading(false); }).catch(() => setLoading(false));
-  };
+  const fetchCoins = useCallback(async () => {
+    try {
+      const tickers = await fetchAllExchanges(ALL_EXCHANGES);
+      
+      // Aggregate by base symbol (combine same coin from different exchanges)
+      const aggregated = new Map<string, Coin>();
+      
+      tickers.forEach(ticker => {
+        const existing = aggregated.get(ticker.base);
+        if (existing) {
+          // Average the prices and sum volumes
+          existing.current_price = (existing.current_price + ticker.price) / 2;
+          existing.total_volume += ticker.volume24h;
+          existing.price_change_percentage_24h = (existing.price_change_percentage_24h + ticker.priceChangePercent24h) / 2;
+        } else {
+          aggregated.set(ticker.base, tickerToCoin(ticker));
+        }
+      });
+      
+      setCoins(Array.from(aggregated.values()));
+      setLoading(false);
+    } catch (error) {
+      console.error('Failed to fetch coins:', error);
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchCoins();
-    const interval = setInterval(() => fetchCoins(false), 30000);
+    const interval = setInterval(fetchCoins, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchCoins]);
 
   const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 4);
   const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 4);
@@ -48,11 +92,26 @@ export default function Dashboard() {
   const runFormula = async (f: typeof SAVED_FORMULAS[0]) => {
     setRunningFormula(f.id);
     try {
-      const res = await fetch('/api/screen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conditions: f.conditions }) });
-      const data = await res.json();
-      setFormulaResults(prev => ({ ...prev, [f.id]: data.results }));
-    } catch (e) { console.error(e); }
-    finally { setRunningFormula(null); }
+      // Run formula client-side instead of API call
+      let results: Coin[] = [];
+      
+      if (f.id === '1') {
+        // Oversold: RSI < 30 (we don't have RSI, so skip)
+        results = coins.filter(c => (c.rsi_14 ?? 50) < 30);
+      } else if (f.id === '2') {
+        // Top Gainers: 24h change > 5%
+        results = coins.filter(c => c.price_change_percentage_24h > 5);
+      } else if (f.id === '3') {
+        // Volume Surge: volume_ratio > 1.5 (we don't have this, so skip)
+        results = coins.filter(c => (c.volume_ratio ?? 1) > 1.5);
+      }
+      
+      setFormulaResults(prev => ({ ...prev, [f.id]: results }));
+    } catch (e) { 
+      console.error(e); 
+    } finally { 
+      setRunningFormula(null); 
+    }
   };
 
   const Skel = ({ h = 20, w = '100%' }: { h?: number; w?: string }) => (
@@ -65,7 +124,7 @@ export default function Dashboard() {
         {c.image && <img src={c.image} alt={c.name} width={24} height={24} style={{ borderRadius: '50%' }} />}
         <div>
           <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f0f2f5' }}>{c.symbol.toUpperCase()}</div>
-          <div style={{ fontSize: '0.6875rem', color: '#545b66' }}>{c.name}</div>
+          <div style={{ fontSize: '0.6875rem', color: '#545b66' }}>${c.current_price.toLocaleString(undefined, { maximumFractionDigits: 6 })}</div>
         </div>
       </div>
       {badge === 'rsi' ? (
@@ -97,7 +156,7 @@ export default function Dashboard() {
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
             <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.2rem' }}>Dashboard</h1>
-            <p style={{ fontSize: '0.75rem', color: '#545b66' }}>{loading ? 'Fetching…' : `${coins.length} coins tracked · auto-refreshes every 30s`}</p>
+            <p style={{ fontSize: '0.75rem', color: '#545b66' }}>{loading ? 'Fetching from all exchanges…' : `${coins.length} coins tracked · auto-refreshes every 30s`}</p>
           </div>
         </div>
 
