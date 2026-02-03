@@ -120,6 +120,7 @@ export default function Dashboard() {
   const [aiSummary, setAiSummary] = useState<AISummaryData | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiExpanded, setAiExpanded] = useState(false);
 
   const fetchCoins = useCallback(async () => {
     try {
@@ -154,6 +155,7 @@ export default function Dashboard() {
       }
       const data = await res.json();
       setAiSummary(data);
+      setAiExpanded(true);
     } catch (e: any) {
       setAiError(e.message);
     } finally {
@@ -163,10 +165,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchCoins();
-    fetchAISummary();
     const interval = setInterval(fetchCoins, 30000);
     return () => clearInterval(interval);
-  }, [fetchCoins, fetchAISummary]);
+  }, [fetchCoins]);
 
   const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 10);
   const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 10);
@@ -239,23 +240,27 @@ export default function Dashboard() {
           <p style={{ fontSize: '0.75rem', color: '#545b66' }}>{loading ? 'Fetching from all exchanges…' : `${coins.length} coins tracked · auto-refreshes every 30s`}</p>
         </div>
 
-        {/* ═══════════════ AI MARKET SUMMARY ═══════════════ */}
+        {/* ═══════════════ AI MARKET SUMMARY (Collapsible) ═══════════════ */}
         <div style={{
-          marginBottom: '1.75rem',
+          marginBottom: '1.5rem',
           background: 'linear-gradient(135deg, rgba(79,140,255,0.06) 0%, rgba(168,85,247,0.06) 100%)',
           border: '1px solid rgba(79,140,255,0.15)',
           borderRadius: 12,
           overflow: 'hidden',
         }}>
-          {/* Header bar */}
-          <div style={{
-            padding: '0.85rem 1.25rem',
-            borderBottom: '1px solid rgba(79,140,255,0.1)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            background: 'rgba(79,140,255,0.03)',
-          }}>
+          {/* Header bar - always visible, clickable to expand/collapse */}
+          <div
+            onClick={() => aiSummary && setAiExpanded(e => !e)}
+            style={{
+              padding: '0.7rem 1.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: 'rgba(79,140,255,0.03)',
+              cursor: aiSummary ? 'pointer' : 'default',
+              userSelect: 'none',
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <span style={{ fontSize: '1rem' }}>🤖</span>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f0f2f5', letterSpacing: '-0.01em' }}>AI Market Summary</span>
@@ -268,13 +273,18 @@ export default function Dashboard() {
                 color: '#4f8cff',
                 letterSpacing: '0.04em',
               }}>POWERED BY CLAUDE</span>
+              {aiSummary && (
+                <span style={{ fontSize: '0.65rem', color: '#545b66', marginLeft: '0.25rem' }}>
+                  {aiExpanded ? '▼' : '▶'}
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               {summaryTime && (
                 <span style={{ fontSize: '0.625rem', color: '#545b66' }}>Generated {summaryTime}</span>
               )}
               <button
-                onClick={fetchAISummary}
+                onClick={(e) => { e.stopPropagation(); fetchAISummary(); }}
                 disabled={aiLoading}
                 style={{
                   background: 'rgba(79,140,255,0.1)',
@@ -289,113 +299,113 @@ export default function Dashboard() {
                   transition: 'all 0.15s',
                 }}
               >
-                {aiLoading ? '⟳ Analyzing...' : '↻ Refresh'}
+                {aiLoading ? '⟳ Analyzing...' : aiSummary ? '↻ Refresh' : '▶ Generate Summary'}
               </button>
             </div>
           </div>
 
-          {/* Content */}
-          <div style={{ padding: '1.25rem' }}>
-            {aiLoading && !aiSummary && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem 1rem', gap: '0.75rem' }}>
-                <div style={{
-                  width: 32, height: 32, borderRadius: '50%',
-                  border: '2px solid rgba(79,140,255,0.2)',
-                  borderTopColor: '#4f8cff',
-                  animation: 'spin 1s linear infinite',
-                }}></div>
-                <span style={{ fontSize: '0.75rem', color: '#8b9099' }}>AI is analyzing {'>'}1400 coins across 5 exchanges...</span>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-              </div>
-            )}
-
-            {aiError && (
+          {/* Expandable content */}
+          {aiLoading && !aiSummary && (
+            <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
               <div style={{
-                padding: '1rem',
+                width: 28, height: 28, borderRadius: '50%',
+                border: '2px solid rgba(79,140,255,0.2)',
+                borderTopColor: '#4f8cff',
+                animation: 'spin 1s linear infinite',
+              }}></div>
+              <span style={{ fontSize: '0.72rem', color: '#8b9099' }}>AI is analyzing {'>'}1400 coins across 5 exchanges...</span>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            </div>
+          )}
+
+          {aiError && (
+            <div style={{ padding: '0.85rem 1.25rem' }}>
+              <div style={{
+                padding: '0.75rem 1rem',
                 background: 'rgba(255,77,77,0.06)',
                 border: '1px solid rgba(255,77,77,0.15)',
                 borderRadius: 8,
               }}>
-                <span style={{ fontSize: '0.75rem', color: '#ff4d4d' }}>⚠ {aiError}</span>
-                <p style={{ fontSize: '0.65rem', color: '#545b66', marginTop: '0.25rem' }}>Make sure ANTHROPIC_API_KEY is set in Railway environment variables.</p>
+                <span style={{ fontSize: '0.72rem', color: '#ff4d4d' }}>⚠ {aiError}</span>
               </div>
-            )}
+            </div>
+          )}
 
-            {aiSummary && (
-              <>
-                {/* Quick stats bar */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))',
-                  gap: '0.5rem',
-                  marginBottom: '1.25rem',
-                }}>
-                  {[
-                    { label: 'BTC', value: fmtPrice(aiSummary.stats.btcPrice), change: aiSummary.stats.btcChange },
-                    { label: 'ETH', value: fmtPrice(aiSummary.stats.ethPrice), change: aiSummary.stats.ethChange },
-                    { label: 'SOL', value: fmtPrice(aiSummary.stats.solPrice), change: aiSummary.stats.solChange },
-                    { label: 'Above 20MA', value: `${((aiSummary.stats.aboveMA20 / aiSummary.stats.maCoinsCount) * 100).toFixed(0)}%`, change: null },
-                    { label: 'Golden Cross', value: String(aiSummary.stats.goldenCross), change: null },
-                    { label: 'Death Cross', value: String(aiSummary.stats.deathCross), change: null },
-                  ].map(s => (
-                    <div key={s.label} style={{
-                      padding: '0.6rem',
-                      borderRadius: 8,
-                      background: 'rgba(255,255,255,0.02)',
-                      border: '1px solid rgba(255,255,255,0.05)',
-                      textAlign: 'center',
-                    }}>
-                      <div style={{ fontSize: '0.55rem', color: '#545b66', marginBottom: '0.2rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
-                      <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f0f2f5', fontFamily: 'JetBrains Mono, monospace' }}>{s.value}</div>
-                      {s.change !== null && (
-                        <div style={{
-                          fontSize: '0.65rem', fontWeight: 600, marginTop: '0.1rem',
-                          color: s.change >= 0 ? '#00c878' : '#ff4d4d',
-                        }}>
-                          {s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* AI Analysis sections */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-                  {sections.map((section, idx) => {
-                    const isRisk = section.title.toUpperCase().includes('RISK');
-                    return (
-                      <div key={idx} style={{
-                        padding: '0.85rem 1rem',
-                        borderRadius: 8,
-                        background: isRisk
-                          ? `rgba(${getRiskColor(section.content) === '#ff4d4d' ? '255,77,77' : getRiskColor(section.content) === '#00c878' ? '0,200,120' : '245,158,35'},0.04)`
-                          : 'rgba(255,255,255,0.02)',
-                        border: `1px solid ${isRisk
-                          ? `rgba(${getRiskColor(section.content) === '#ff4d4d' ? '255,77,77' : getRiskColor(section.content) === '#00c878' ? '0,200,120' : '245,158,35'},0.15)`
-                          : 'rgba(255,255,255,0.04)'}`,
+          {aiSummary && aiExpanded && (
+            <div style={{ padding: '1rem 1.25rem', borderTop: '1px solid rgba(79,140,255,0.1)' }}>
+              {/* Quick stats bar */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))',
+                gap: '0.5rem',
+                marginBottom: '1rem',
+              }}>
+                {[
+                  { label: 'BTC', value: fmtPrice(aiSummary.stats.btcPrice), change: aiSummary.stats.btcChange },
+                  { label: 'ETH', value: fmtPrice(aiSummary.stats.ethPrice), change: aiSummary.stats.ethChange },
+                  { label: 'SOL', value: fmtPrice(aiSummary.stats.solPrice), change: aiSummary.stats.solChange },
+                  { label: 'Above 20MA', value: `${((aiSummary.stats.aboveMA20 / aiSummary.stats.maCoinsCount) * 100).toFixed(0)}%`, change: null },
+                  { label: 'Golden Cross', value: String(aiSummary.stats.goldenCross), change: null },
+                  { label: 'Death Cross', value: String(aiSummary.stats.deathCross), change: null },
+                ].map(s => (
+                  <div key={s.label} style={{
+                    padding: '0.5rem',
+                    borderRadius: 8,
+                    background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    textAlign: 'center',
+                  }}>
+                    <div style={{ fontSize: '0.5rem', color: '#545b66', marginBottom: '0.15rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f0f2f5', fontFamily: 'JetBrains Mono, monospace' }}>{s.value}</div>
+                    {s.change !== null && (
+                      <div style={{
+                        fontSize: '0.6rem', fontWeight: 600, marginTop: '0.1rem',
+                        color: s.change >= 0 ? '#00c878' : '#ff4d4d',
                       }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.35rem' }}>
-                          <span style={{ fontSize: '0.75rem' }}>{getSentimentIcon(section.title)}</span>
-                          <span style={{
-                            fontSize: '0.65rem',
-                            fontWeight: 700,
-                            color: isRisk ? getRiskColor(section.content) : '#8b9099',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.06em',
-                          }}>{section.title}</span>
-                        </div>
-                        <p style={{
-                          fontSize: '0.78rem',
-                          color: '#c8ccd2',
-                          lineHeight: 1.55,
-                          margin: 0,
-                        }}>{section.content}</p>
+                        {s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%
                       </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* AI Analysis sections */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {sections.map((section, idx) => {
+                  const isRisk = section.title.toUpperCase().includes('RISK');
+                  return (
+                    <div key={idx} style={{
+                      padding: '0.7rem 0.85rem',
+                      borderRadius: 8,
+                      background: isRisk
+                        ? `rgba(${getRiskColor(section.content) === '#ff4d4d' ? '255,77,77' : getRiskColor(section.content) === '#00c878' ? '0,200,120' : '245,158,35'},0.04)`
+                        : 'rgba(255,255,255,0.02)',
+                      border: `1px solid ${isRisk
+                        ? `rgba(${getRiskColor(section.content) === '#ff4d4d' ? '255,77,77' : getRiskColor(section.content) === '#00c878' ? '0,200,120' : '245,158,35'},0.15)`
+                        : 'rgba(255,255,255,0.04)'}`,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                        <span style={{ fontSize: '0.7rem' }}>{getSentimentIcon(section.title)}</span>
+                        <span style={{
+                          fontSize: '0.6rem',
+                          fontWeight: 700,
+                          color: isRisk ? getRiskColor(section.content) : '#8b9099',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.06em',
+                        }}>{section.title}</span>
+                      </div>
+                      <p style={{
+                        fontSize: '0.75rem',
+                        color: '#c8ccd2',
+                        lineHeight: 1.5,
+                        margin: 0,
+                      }}>{section.content}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           </div>
         </div>
 
