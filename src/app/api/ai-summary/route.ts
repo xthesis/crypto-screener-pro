@@ -131,8 +131,8 @@ Keep the total response under 250 words. Be direct and analytical, no disclaimer
 
     if (!claudeRes.ok) {
       const err = await claudeRes.text();
-      console.error('Claude API error:', err);
-      throw new Error('AI analysis failed');
+      console.error('Claude API error:', claudeRes.status, err);
+      return NextResponse.json({ error: `Claude API ${claudeRes.status}: ${err}` }, { status: 500 });
     }
 
     const claudeData = await claudeRes.json();
