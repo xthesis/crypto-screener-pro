@@ -368,6 +368,8 @@ export default function TradeJournal() {
       case 'pnl': vA = a.pnl; vB = b.pnl; break;
       case 'pnlPercent': vA = a.pnlPercent; vB = b.pnlPercent; break;
       case 'holdingTime': vA = a.holdingTime; vB = b.holdingTime; break;
+      case 'entryTime': vA = a.entries[0]?.timestamp || 0; vB = b.entries[0]?.timestamp || 0; break;
+      case 'exitTime': vA = a.exits[a.exits.length - 1]?.timestamp || 0; vB = b.exits[b.exits.length - 1]?.timestamp || 0; break;
       default: vA = a.entries[0]?.timestamp || 0; vB = b.entries[0]?.timestamp || 0;
     }
     return sortDir === 'asc' ? vA - vB : vB - vA;
@@ -550,6 +552,8 @@ export default function TradeJournal() {
                   <tr>
                     <th style={{ textAlign: 'left' }}>Symbol</th>
                     <th style={{ textAlign: 'center' }}>Dir</th>
+                    <th style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => handleSort('entryTime')}>Entry Date<SortIcon field="entryTime" /></th>
+                    <th style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => handleSort('exitTime')}>Exit Date<SortIcon field="exitTime" /></th>
                     <th style={{ textAlign: 'center' }}>Result</th>
                     <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('pnl')}>P&L<SortIcon field="pnl" /></th>
                     <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('pnlPercent')}>P&L %<SortIcon field="pnlPercent" /></th>
@@ -570,6 +574,18 @@ export default function TradeJournal() {
                         <span style={{ fontSize: '0.65rem', fontWeight: 600, color: g.direction === 'long' ? '#00c878' : '#ff4d4d', textTransform: 'uppercase' }}>
                           {g.direction === 'long' ? '↑ Long' : '↓ Short'}
                         </span>
+                      </td>
+                      <td style={{ textAlign: 'left', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.68rem', color: '#c9cdd3', whiteSpace: 'nowrap' }}>
+                        {g.entries[0] ? new Date(g.entries[0].timestamp).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}
+                        <div style={{ fontSize: '0.58rem', color: '#545b66' }}>
+                          {g.entries[0] ? new Date(g.entries[0].timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''}
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'left', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.68rem', color: '#c9cdd3', whiteSpace: 'nowrap' }}>
+                        {g.exits[0] ? new Date(g.exits[g.exits.length - 1].timestamp).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}
+                        <div style={{ fontSize: '0.58rem', color: '#545b66' }}>
+                          {g.exits[0] ? new Date(g.exits[g.exits.length - 1].timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''}
+                        </div>
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <span style={{
