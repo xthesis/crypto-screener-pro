@@ -13,7 +13,6 @@ interface Trade {
   price: number;
   quantity: number;
   timestamp: number;
-  fee?: number;
 }
 
 interface TradeGroup {
@@ -25,6 +24,8 @@ interface TradeGroup {
   holdingTime: number;
   entryAvg: number;
   exitAvg: number;
+  entryQty: number;
+  direction: string;
 }
 
 interface Candle {
@@ -35,204 +36,139 @@ interface Candle {
   close: number;
 }
 
-// ═══════════════════════════════════════════════
-// CSV PARSERS
-// ═══════════════════════════════════════════════
-
-function cleanSymbol(s: string): string {
-  return s.replace(/[-_\/]/g, '').replace(/USDT|USD|BUSD|PERP/gi, '').toUpperCase();
+function formatDuration(ms: number): string {
+  if (!ms || ms <= 0) return '< 1m';
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+  if (ms < 86400000) return `${(ms / 3600000).toFixed(1)}h`;
+  return `${(ms / 86400000).toFixed(1)}d`;
 }
 
-function parseTimestamp(val: string): number {
-  if (!val) return 0;
-  // Try parsing as number first (unix ms or s)
-  const num = Number(val);
-  if (!isNaN(num) && num > 1e12) return num; // ms
-  if (!isNaN(num) && num > 1e9) return num * 1000; // s
-  // Try as date string
-  const d = new Date(val);
-  if (!isNaN(d.getTime())) return d.getTime();
-  return 0;
-}
-
-function parseSide(val: string): string {
-  const v = val.toLowerCase().trim();
-  if (v.includes('buy') || v === 'long') return 'buy';
-  if (v.includes('sell') || v === 'short') return 'sell';
-  return v;
-}
-
-function autoDetectAndParse(text: string): Trade[] {
-  const lines = text.trim().split('\n');
-  if (lines.length < 2) return [];
-
-  // Detect delimiter
-  const delimiter = lines[0].includes('\t') ? '\t' : ',';
-  const headers = lines[0].split(delimiter).map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
-
-  // Map columns by searching for known names
-  const findCol = (...names: string[]) => headers.findIndex(h => names.some(n => h.includes(n)));
-
-  const symbolCol = findCol('symbol', 'pair', 'market', 'coin', 'asset');
-  const sideCol = findCol('side', 'type', 'direction', 'order type');
-  const priceCol = findCol('price', 'avg', 'filled price', 'exec price', 'execution price', 'deal price');
-  const qtyCol = findCol('quantity', 'qty', 'amount', 'size', 'filled', 'executed', 'vol');
-  const timeCol = findCol('time', 'date', 'created', 'timestamp');
-  const feeCol = findCol('fee', 'commission');
-
-  if (symbolCol === -1 || sideCol === -1 || priceCol === -1) {
-    throw new Error(`Could not detect columns. Found headers: ${headers.join(', ')}\nNeed at minimum: symbol/pair, side/type, price`);
-  }
-
-  const trades: Trade[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    // Handle CSV with quoted fields
-    const cols: string[] = [];
-    let current = '';
-    let inQuotes = false;
-    for (const ch of line) {
-      if (ch === '"') { inQuotes = !inQuotes; continue; }
-      if (ch === delimiter[0] && !inQuotes) { cols.push(current.trim()); current = ''; continue; }
-      current += ch;
-    }
-    cols.push(current.trim());
-
-    const price = parseFloat(cols[priceCol]);
-    const qty = qtyCol !== -1 ? parseFloat(cols[qtyCol]) : 1;
-    const ts = timeCol !== -1 ? parseTimestamp(cols[timeCol]) : Date.now();
-
-    if (!price || isNaN(price) || price <= 0) continue;
-
-    trades.push({
-      symbol: cleanSymbol(cols[symbolCol] || ''),
-      side: parseSide(cols[sideCol] || ''),
-      price,
-      quantity: Math.abs(qty) || 1,
-      timestamp: ts,
-      fee: feeCol !== -1 ? parseFloat(cols[feeCol]) || 0 : 0,
-    });
-  }
-
-  return trades;
+function fmtPrice(v: number): string {
+  if (v >= 1000) return '$' + v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (v >= 1) return '$' + v.toFixed(2);
+  if (v >= 0.01) return '$' + v.toFixed(4);
+  return '$' + v.toFixed(6);
 }
 
 // ═══════════════════════════════════════════════
-// CHART COMPONENT
+// CHART MODAL
 // ═══════════════════════════════════════════════
 
 function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void }) {
   const chartRef = useRef<HTMLDivElement>(null);
-  const [candles, setCandles] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [candles, setCandles] = useState<Candle[]>([]);
 
   useEffect(() => {
-    const fetchCandles = async () => {
-      setLoading(true);
-      setError('');
-      const allTimes = [...group.entries, ...group.exits].map(t => t.timestamp);
-      const start = Math.min(...allTimes);
-      const end = Math.max(...allTimes);
+    const allTimes = [...group.entries, ...group.exits].map(t => t.timestamp);
+    const start = Math.min(...allTimes);
+    const end = Math.max(...allTimes);
 
-      try {
-        const res = await fetch(`/api/candles?symbol=${group.symbol}&start=${start}&end=${end}`);
-        if (!res.ok) throw new Error('Failed to fetch candles');
-        const data = await res.json();
+    fetch(`/api/candles?symbol=${group.symbol}&start=${start}&end=${end}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error);
         setCandles(data.candles || []);
-      } catch (e: any) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchCandles();
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
   }, [group]);
 
   useEffect(() => {
     if (!chartRef.current || candles.length === 0) return;
-
     let chart: any;
-    const initChart = async () => {
-      const { createChart, ColorType, CrosshairMode } = await import('lightweight-charts');
 
+    const init = async () => {
+      const lc = await import('lightweight-charts');
       chartRef.current!.innerHTML = '';
-      chart = createChart(chartRef.current!, {
+
+      chart = lc.createChart(chartRef.current!, {
         width: chartRef.current!.clientWidth,
         height: 420,
-        layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b9099' },
+        layout: { background: { type: lc.ColorType.Solid, color: '#0d1117' }, textColor: '#8b9099' },
         grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
-        crosshair: { mode: CrosshairMode.Normal },
+        crosshair: { mode: lc.CrosshairMode.Normal },
         timeScale: { timeVisible: true, secondsVisible: false, borderColor: 'rgba(255,255,255,0.06)' },
         rightPriceScale: { borderColor: 'rgba(255,255,255,0.06)' },
       });
 
-      const candleSeries = chart.addCandlestickSeries({
-        upColor: '#00c878',
-        downColor: '#ff4d4d',
-        borderUpColor: '#00c878',
-        borderDownColor: '#ff4d4d',
-        wickUpColor: '#00c878',
-        wickDownColor: '#ff4d4d',
+      const series = chart.addCandlestickSeries({
+        upColor: '#00c878', downColor: '#ff4d4d',
+        borderUpColor: '#00c878', borderDownColor: '#ff4d4d',
+        wickUpColor: '#00c878', wickDownColor: '#ff4d4d',
       });
-      candleSeries.setData(candles);
+      series.setData(candles);
 
-      // Add entry markers (green triangles)
-      const entryMarkers = group.entries.map(t => ({
-        time: Math.floor(t.timestamp / 1000) as any,
-        position: 'belowBar' as const,
-        color: '#00c878',
-        shape: 'arrowUp' as const,
-        text: `BUY $${t.price.toFixed(t.price > 1 ? 2 : 6)}`,
-      }));
+      // Find nearest candle time for each trade marker
+      const findNearestTime = (ts: number) => {
+        const targetSec = Math.floor(ts / 1000);
+        let best = candles[0].time;
+        let bestDiff = Math.abs(targetSec - best);
+        for (const c of candles) {
+          const diff = Math.abs(targetSec - c.time);
+          if (diff < bestDiff) { best = c.time; bestDiff = diff; }
+        }
+        return best;
+      };
 
-      // Add exit markers (red triangles)
-      const exitMarkers = group.exits.map(t => ({
-        time: Math.floor(t.timestamp / 1000) as any,
-        position: 'aboveBar' as const,
-        color: '#ff4d4d',
-        shape: 'arrowDown' as const,
-        text: `SELL $${t.price.toFixed(t.price > 1 ? 2 : 6)}`,
-      }));
+      const markers: any[] = [];
 
-      const allMarkers = [...entryMarkers, ...exitMarkers].sort((a, b) => (a.time as number) - (b.time as number));
-      candleSeries.setMarkers(allMarkers);
+      for (const t of group.entries) {
+        markers.push({
+          time: findNearestTime(t.timestamp),
+          position: 'belowBar',
+          color: '#00c878',
+          shape: 'arrowUp',
+          text: `BUY ${fmtPrice(t.price)}`,
+        });
+      }
+      for (const t of group.exits) {
+        markers.push({
+          time: findNearestTime(t.timestamp),
+          position: 'aboveBar',
+          color: '#ff4d4d',
+          shape: 'arrowDown',
+          text: `SELL ${fmtPrice(t.price)}`,
+        });
+      }
 
-      // Add entry/exit price lines
-      candleSeries.createPriceLine({
-        price: group.entryAvg,
-        color: 'rgba(0,200,120,0.5)',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: `Entry Avg $${group.entryAvg.toFixed(group.entryAvg > 1 ? 2 : 6)}`,
+      markers.sort((a, b) => a.time - b.time);
+      series.setMarkers(markers);
+
+      // Price lines for avg entry/exit
+      series.createPriceLine({
+        price: group.entryAvg, color: 'rgba(0,200,120,0.5)', lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: `Avg Entry ${fmtPrice(group.entryAvg)}`,
       });
-
-      candleSeries.createPriceLine({
-        price: group.exitAvg,
-        color: 'rgba(255,77,77,0.5)',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: `Exit Avg $${group.exitAvg.toFixed(group.exitAvg > 1 ? 2 : 6)}`,
+      series.createPriceLine({
+        price: group.exitAvg, color: 'rgba(255,77,77,0.5)', lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: `Avg Exit ${fmtPrice(group.exitAvg)}`,
       });
 
       chart.timeScale().fitContent();
     };
 
-    initChart();
+    init();
     return () => { if (chart) chart.remove(); };
   }, [candles, group]);
 
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-      <div style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, width: '100%', maxWidth: 1000, overflow: 'hidden' }}>
+    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, width: '100%', maxWidth: 1000, overflow: 'hidden' }}>
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: '1rem', color: '#f0f2f5' }}>{group.symbol}</span>
+            <span style={{ fontSize: '0.65rem', color: '#8b9099', textTransform: 'uppercase' }}>{group.direction}</span>
             <span style={{
               fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: 4,
               background: group.pnl >= 0 ? 'rgba(0,200,120,0.12)' : 'rgba(255,77,77,0.12)',
@@ -246,15 +182,16 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
 
         {/* Chart */}
         <div style={{ padding: '0.5rem' }}>
-          {loading && <div style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#545b66' }}>Loading chart data...</div>}
-          {error && <div style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff4d4d', fontSize: '0.8rem' }}>{error}</div>}
+          {loading && <div style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#545b66' }}>Loading chart data for {group.symbol}...</div>}
+          {error && <div style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff4d4d', fontSize: '0.8rem' }}>⚠️ {error}</div>}
           <div ref={chartRef} />
         </div>
 
         {/* Trade details */}
-        <div style={{ padding: '0.5rem 1rem 0.75rem', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: '1.5rem', fontSize: '0.68rem', color: '#8b9099' }}>
-          <span>Entry: <b style={{ color: '#00c878' }}>${group.entryAvg.toFixed(group.entryAvg > 1 ? 2 : 6)}</b></span>
-          <span>Exit: <b style={{ color: '#ff4d4d' }}>${group.exitAvg.toFixed(group.exitAvg > 1 ? 2 : 6)}</b></span>
+        <div style={{ padding: '0.5rem 1rem 0.75rem', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: '1.5rem', fontSize: '0.68rem', color: '#8b9099', flexWrap: 'wrap' }}>
+          <span>Entry: <b style={{ color: '#00c878' }}>{fmtPrice(group.entryAvg)}</b></span>
+          <span>Exit: <b style={{ color: '#ff4d4d' }}>{fmtPrice(group.exitAvg)}</b></span>
+          <span>Size: <b style={{ color: '#f0f2f5' }}>{group.entryQty?.toFixed(2)}</b></span>
           <span>Held: <b style={{ color: '#f0f2f5' }}>{formatDuration(group.holdingTime)}</b></span>
           <span>Entries: {group.entries.length} · Exits: {group.exits.length}</span>
         </div>
@@ -263,91 +200,113 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
   );
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
-  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
-  if (ms < 86400000) return `${(ms / 3600000).toFixed(1)}h`;
-  return `${(ms / 86400000).toFixed(1)}d`;
-}
-
 // ═══════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════
 
 export default function TradeJournal() {
-  const [trades, setTrades] = useState<Trade[]>([]);
   const [groups, setGroups] = useState<TradeGroup[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [analysis, setAnalysis] = useState('');
   const [loading, setLoading] = useState(false);
-  const [parseError, setParseError] = useState('');
+  const [error, setError] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<TradeGroup | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [hasData, setHasData] = useState(false);
+  const [sortField, setSortField] = useState('timestamp');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [filterSymbol, setFilterSymbol] = useState('all');
+  const [filterResult, setFilterResult] = useState<'all' | 'win' | 'loss'>('all');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = useCallback((file: File) => {
-    setParseError('');
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const text = e.target?.result as string;
-        const parsed = autoDetectAndParse(text);
-        if (parsed.length === 0) throw new Error('No valid trades found in file');
-        setTrades(parsed);
-        runAnalysis(parsed);
-      } catch (err: any) {
-        setParseError(err.message);
-      }
-    };
-    reader.readAsText(file);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
-  }, [handleFile]);
-
-  const runAnalysis = async (tradeData: Trade[]) => {
+  const processFile = useCallback(async (text: string) => {
     setLoading(true);
-    setAnalysisLoading(true);
+    setError('');
     try {
       const res = await fetch('/api/trade-analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trades: tradeData }),
+        body: JSON.stringify({ rawText: text }),
       });
       const data = await res.json();
+      if (data.error) throw new Error(data.error);
       setGroups(data.groups || []);
       setStats(data.stats || null);
       setAnalysis(data.analysis || '');
+      setHasData(true);
     } catch (e: any) {
-      setParseError(e.message);
+      setError(e.message);
     } finally {
       setLoading(false);
-      setAnalysisLoading(false);
     }
+  }, []);
+
+  const handleFile = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => processFile(e.target?.result as string);
+    reader.readAsText(file);
+  }, [processFile]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  }, [handleFile]);
+
+  const handleSample = () => {
+    const sampleCSV = `time\tcoin\tDirection\tPrice\tSize\tTrade Volume\tFee\tclosedPnl
+11/30/2024 - 11:02:49\tHYPE/USDC\tBuy\t6.7272\t70.08\t471.44\t0.024\t-0.165
+11/30/2024 - 12:47:22\tHYPE/USDC\tSell\t6.415\t70.05\t449.38\t0.157\t-22.177
+11/30/2024 - 12:52:36\tHYPE/USDC\tBuy\t6.599\t68.1\t449.45\t0.023\t-0.157
+11/30/2024 - 12:56:17\tHYPE/USDC\tBuy\t6.708\t14.31\t95.99\t0.005\t-0.033
+11/30/2024 - 16:31:39\tHYPE/USDC\tSell\t7.332\t82.38\t604.02\t0.211\t58.378
+11/30/2024 - 16:34:12\tHYPE/USDC\tBuy\t7.315\t82.54\t603.80\t0.028\t-0.211
+11/30/2024 - 17:59:18\tHYPE/USDC\tSell\t7.271\t82.51\t599.96\t0.209\t-4.043
+11/30/2024 - 18:01:17\tHYPE/USDC\tBuy\t7.404\t81\t599.72\t0.028\t-0.209
+11/30/2024 - 21:47:37\tHYPE/USDC\tSell\t8.886\t60.73\t539.64\t0.188\t89.656
+11/30/2024 - 22:08:20\tHYPE/USDC\tSell\t8.693\t10.12\t87.97\t0.030\t12.993
+12/1/2024 - 12:19:57\tJEFF/USDC\tBuy\t28.429\t24\t682.29\t0.008\t-0.238
+12/1/2024 - 12:39:56\tJEFF/USDC\tSell\t30.194\t23\t694.46\t0.243\t40.123
+12/1/2024 - 15:24:53\tJEFF/USDC\tBuy\t35.795\t10\t357.95\t0.003\t-0.124
+12/1/2024 - 15:25:01\tJEFF/USDC\tBuy\t35.75\t15\t536.25\t0.005\t-0.187
+12/1/2024 - 15:31:18\tJEFF/USDC\tSell\t33.312\t25\t832.80\t0.291\t-54.999
+12/1/2024 - 15:40:50\tPOINTS/USDC\tBuy\t0.040059\t1000\t40.05\t0.349\t-0.014
+12/1/2024 - 15:52:34\tPOINTS/USDC\tSell\t0.035769\t999\t35.73\t0.012\t-4.312`;
+    processFile(sampleCSV);
   };
 
-  const handleSampleData = () => {
-    // Generate sample trades for demo
-    const now = Date.now();
-    const sample: Trade[] = [
-      { symbol: 'BTC', side: 'buy', price: 95000, quantity: 0.1, timestamp: now - 86400000 * 5 },
-      { symbol: 'BTC', side: 'sell', price: 98500, quantity: 0.1, timestamp: now - 86400000 * 3 },
-      { symbol: 'ETH', side: 'buy', price: 3200, quantity: 2, timestamp: now - 86400000 * 7 },
-      { symbol: 'ETH', side: 'sell', price: 3050, quantity: 2, timestamp: now - 86400000 * 6 },
-      { symbol: 'SOL', side: 'buy', price: 210, quantity: 10, timestamp: now - 86400000 * 4 },
-      { symbol: 'SOL', side: 'sell', price: 225, quantity: 10, timestamp: now - 86400000 * 2 },
-      { symbol: 'HYPE', side: 'buy', price: 28, quantity: 50, timestamp: now - 86400000 * 3 },
-      { symbol: 'HYPE', side: 'sell', price: 26.5, quantity: 50, timestamp: now - 86400000 * 1 },
-      { symbol: 'DOGE', side: 'buy', price: 0.32, quantity: 5000, timestamp: now - 86400000 * 6 },
-      { symbol: 'DOGE', side: 'sell', price: 0.35, quantity: 5000, timestamp: now - 86400000 * 4 },
-    ];
-    setTrades(sample);
-    runAnalysis(sample);
+  // Filter & sort
+  const symbols = [...new Set(groups.map(g => g.symbol))];
+  let filtered = groups;
+  if (filterSymbol !== 'all') filtered = filtered.filter(g => g.symbol === filterSymbol);
+  if (filterResult === 'win') filtered = filtered.filter(g => g.pnl > 0);
+  if (filterResult === 'loss') filtered = filtered.filter(g => g.pnl <= 0);
+
+  filtered = [...filtered].sort((a, b) => {
+    let vA: number, vB: number;
+    switch (sortField) {
+      case 'pnl': vA = a.pnl; vB = b.pnl; break;
+      case 'pnlPercent': vA = a.pnlPercent; vB = b.pnlPercent; break;
+      case 'holdingTime': vA = a.holdingTime; vB = b.holdingTime; break;
+      default: vA = a.entries[0]?.timestamp || 0; vB = b.entries[0]?.timestamp || 0;
+    }
+    return sortDir === 'asc' ? vA - vB : vB - vA;
+  });
+
+  const handleSort = (field: string) => {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('desc'); }
+  };
+
+  const SortIcon = ({ field }: { field: string }) => (
+    <span style={{ opacity: sortField === field ? 1 : 0.25, color: sortField === field ? '#4f8cff' : 'inherit', marginLeft: 4, fontSize: '0.6rem' }}>
+      {sortField === field ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+    </span>
+  );
+
+  const reset = () => {
+    setGroups([]); setStats(null); setAnalysis(''); setHasData(false); setError('');
+    setFilterSymbol('all'); setFilterResult('all');
   };
 
   return (
@@ -369,58 +328,71 @@ export default function TradeJournal() {
         <div style={{ marginBottom: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
             <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em' }}>📒 Trade Journal</h1>
-            <span style={{ fontSize: '0.55rem', fontWeight: 600, padding: '0.15rem 0.4rem', borderRadius: 4, background: 'rgba(168,85,247,0.15)', color: '#a855f7', letterSpacing: '0.04em' }}>BETA</span>
+            <span style={{ fontSize: '0.55rem', fontWeight: 600, padding: '0.15rem 0.4rem', borderRadius: 4, background: 'rgba(168,85,247,0.15)', color: '#a855f7' }}>BETA</span>
           </div>
-          <p style={{ fontSize: '0.72rem', color: '#545b66' }}>Upload your trade history CSV · AI analyzes your performance · View trades on charts</p>
+          <p style={{ fontSize: '0.72rem', color: '#545b66' }}>
+            {hasData ? `${groups.length} round-trip trades from ${stats?.totalRawTrades || 0} executions · ${stats?.uniqueSymbols || 0} symbols` : 'Upload your trade history CSV · View entries & exits on charts · AI analyzes your performance'}
+          </p>
         </div>
 
         {/* Upload Area */}
-        {trades.length === 0 && (
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-            onClick={() => fileRef.current?.click()}
-            style={{
-              border: `2px dashed ${dragOver ? '#4f8cff' : 'rgba(255,255,255,0.1)'}`,
-              borderRadius: 12, padding: '3rem 2rem', textAlign: 'center', cursor: 'pointer',
-              background: dragOver ? 'rgba(79,140,255,0.05)' : 'rgba(255,255,255,0.02)',
-              transition: 'all 0.2s',
-              marginBottom: '1rem',
-            }}
-          >
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📁</div>
-            <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#f0f2f5', marginBottom: '0.35rem' }}>
-              Drop your trade history CSV here
+        {!hasData && !loading && (
+          <>
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              onClick={() => fileRef.current?.click()}
+              style={{
+                border: `2px dashed ${dragOver ? '#4f8cff' : 'rgba(255,255,255,0.1)'}`,
+                borderRadius: 12, padding: '3rem 2rem', textAlign: 'center', cursor: 'pointer',
+                background: dragOver ? 'rgba(79,140,255,0.05)' : 'rgba(255,255,255,0.02)',
+                transition: 'all 0.2s', marginBottom: '1rem',
+              }}
+            >
+              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📁</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#f0f2f5', marginBottom: '0.35rem' }}>Drop your trade history CSV here</div>
+              <div style={{ fontSize: '0.7rem', color: '#545b66', marginBottom: '1rem' }}>Supports Hyperliquid, Binance, Bybit, OKX, or any CSV with symbol + side + price</div>
+              <input ref={fileRef} type="file" accept=".csv,.tsv,.txt" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} style={{ display: 'none' }} />
+              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                {['Hyperliquid', 'Binance', 'Bybit', 'OKX', 'Custom CSV'].map(ex => (
+                  <span key={ex} style={{ fontSize: '0.6rem', padding: '0.25rem 0.5rem', borderRadius: 4, background: 'rgba(255,255,255,0.06)', color: '#8b9099' }}>{ex}</span>
+                ))}
+              </div>
             </div>
-            <div style={{ fontSize: '0.7rem', color: '#545b66', marginBottom: '1rem' }}>
-              Supports Binance, Bybit, OKX, or any CSV with symbol, side, price columns
+
+            <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+              <button onClick={handleSample} style={{
+                background: 'rgba(79,140,255,0.1)', border: '1px solid rgba(79,140,255,0.2)',
+                color: '#4f8cff', padding: '0.4rem 1rem', borderRadius: 6, fontSize: '0.72rem',
+                cursor: 'pointer', fontWeight: 600,
+              }}>Try with sample Hyperliquid trades →</button>
             </div>
-            <input ref={fileRef} type="file" accept=".csv,.tsv,.txt" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} style={{ display: 'none' }} />
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-              <span style={{ fontSize: '0.6rem', padding: '0.25rem 0.5rem', borderRadius: 4, background: 'rgba(255,255,255,0.06)', color: '#8b9099' }}>Binance</span>
-              <span style={{ fontSize: '0.6rem', padding: '0.25rem 0.5rem', borderRadius: 4, background: 'rgba(255,255,255,0.06)', color: '#8b9099' }}>Bybit</span>
-              <span style={{ fontSize: '0.6rem', padding: '0.25rem 0.5rem', borderRadius: 4, background: 'rgba(255,255,255,0.06)', color: '#8b9099' }}>OKX</span>
-              <span style={{ fontSize: '0.6rem', padding: '0.25rem 0.5rem', borderRadius: 4, background: 'rgba(255,255,255,0.06)', color: '#8b9099' }}>Custom CSV</span>
+
+            <div className="card" style={{ padding: '1rem 1.25rem' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#f0f2f5', marginBottom: '0.5rem' }}>📋 How to export</div>
+              <div style={{ fontSize: '0.7rem', color: '#8b9099', lineHeight: 1.7 }}>
+                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Hyperliquid:</b> Portfolio → Trade History → Export CSV</p>
+                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Binance:</b> Orders → Trade History → Export</p>
+                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Bybit:</b> Orders → Trade History → Export</p>
+                <p><b style={{ color: '#f5a623' }}>Custom:</b> Needs columns: <code style={{ fontSize: '0.65rem', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>symbol, side, price</code> (+ optional: size, time, fee, closedPnl)</p>
+              </div>
             </div>
+          </>
+        )}
+
+        {/* Loading */}
+        {loading && (
+          <div style={{ textAlign: 'center', padding: '3rem', color: '#545b66' }}>
+            <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⏳</div>
+            <div style={{ fontSize: '0.82rem' }}>Analyzing your trades...</div>
           </div>
         )}
 
-        {trades.length === 0 && (
-          <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-            <button onClick={handleSampleData} style={{
-              background: 'rgba(79,140,255,0.1)', border: '1px solid rgba(79,140,255,0.2)',
-              color: '#4f8cff', padding: '0.4rem 1rem', borderRadius: 6, fontSize: '0.72rem',
-              cursor: 'pointer', fontWeight: 600,
-            }}>
-              Try with sample trades →
-            </button>
-          </div>
-        )}
-
-        {parseError && (
+        {/* Error */}
+        {error && (
           <div style={{ background: 'rgba(255,77,77,0.08)', border: '1px solid rgba(255,77,77,0.2)', borderRadius: 8, padding: '0.7rem 1rem', marginBottom: '1rem' }}>
-            <span style={{ fontSize: '0.75rem', color: '#ff4d4d' }}>⚠️ {parseError}</span>
+            <span style={{ fontSize: '0.75rem', color: '#ff4d4d' }}>⚠️ {error}</span>
           </div>
         )}
 
@@ -428,14 +400,14 @@ export default function TradeJournal() {
         {stats && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.6rem', marginBottom: '1.25rem' }}>
             {[
-              { label: 'Total Trades', value: stats.totalTrades, color: '#f0f2f5' },
+              { label: 'Round Trips', value: stats.totalTrades, color: '#f0f2f5' },
               { label: 'Win Rate', value: `${stats.winRate}%`, color: parseFloat(stats.winRate) >= 50 ? '#00c878' : '#ff4d4d' },
-              { label: 'Total P&L', value: `$${stats.totalPnl?.toFixed(2)}`, color: stats.totalPnl >= 0 ? '#00c878' : '#ff4d4d' },
-              { label: 'Avg Win', value: `+${stats.avgWin?.toFixed(1)}%`, color: '#00c878' },
-              { label: 'Avg Loss', value: `${stats.avgLoss?.toFixed(1)}%`, color: '#ff4d4d' },
-              { label: 'Avg Hold Time', value: stats.avgHoldingTime, color: '#4f8cff' },
-              { label: 'Winners', value: stats.winners, color: '#00c878' },
-              { label: 'Losers', value: stats.losers, color: '#ff4d4d' },
+              { label: 'Total P&L', value: `$${stats.totalPnl}`, color: stats.totalPnl >= 0 ? '#00c878' : '#ff4d4d' },
+              { label: 'Avg Win', value: `+${stats.avgWin}%`, color: '#00c878' },
+              { label: 'Avg Loss', value: `${stats.avgLoss}%`, color: '#ff4d4d' },
+              { label: 'R:R Ratio', value: stats.riskReward || 'N/A', color: '#4f8cff' },
+              { label: 'Avg Hold', value: stats.avgHoldingTime, color: '#8b9099' },
+              { label: 'Total Fees', value: `$${stats.totalFees}`, color: '#f5a623' },
             ].map(s => (
               <div key={s.label} className="stat-card">
                 <div className="label">{s.label}</div>
@@ -451,57 +423,81 @@ export default function TradeJournal() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
               <span style={{ fontSize: '1rem' }}>🤖</span>
               <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#f0f2f5' }}>AI Trading Coach</span>
-              {analysisLoading && <span style={{ fontSize: '0.65rem', color: '#545b66' }}>Analyzing...</span>}
             </div>
-            <div style={{ fontSize: '0.76rem', color: '#c9cdd3', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
-              {analysis}
-            </div>
+            <div style={{ fontSize: '0.76rem', color: '#c9cdd3', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{analysis}</div>
           </div>
         )}
 
-        {/* Trade List */}
-        {groups.length > 0 && (
+        {/* Filters */}
+        {hasData && groups.length > 0 && (
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.65rem', color: '#545b66', fontWeight: 600, textTransform: 'uppercase' }}>Symbol:</span>
+            <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)}
+              style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem', borderRadius: 6, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#f0f2f5', cursor: 'pointer' }}>
+              <option value="all">All ({groups.length})</option>
+              {symbols.map(s => <option key={s} value={s}>{s} ({groups.filter(g => g.symbol === s).length})</option>)}
+            </select>
+
+            <span style={{ fontSize: '0.65rem', color: '#545b66', fontWeight: 600, textTransform: 'uppercase', marginLeft: '0.5rem' }}>Result:</span>
+            {(['all', 'win', 'loss'] as const).map(f => (
+              <button key={f} onClick={() => setFilterResult(f)}
+                style={{
+                  padding: '0.3rem 0.65rem', borderRadius: 6, fontSize: '0.7rem', fontWeight: 600,
+                  background: filterResult === f ? (f === 'win' ? 'rgba(0,200,120,0.15)' : f === 'loss' ? 'rgba(255,77,77,0.15)' : 'rgba(79,140,255,0.15)') : 'rgba(255,255,255,0.04)',
+                  color: filterResult === f ? (f === 'win' ? '#00c878' : f === 'loss' ? '#ff4d4d' : '#4f8cff') : '#8b9099',
+                  border: `1px solid ${filterResult === f ? 'rgba(79,140,255,0.2)' : 'rgba(255,255,255,0.06)'}`,
+                  cursor: 'pointer', textTransform: 'capitalize',
+                }}
+              >{f}</button>
+            ))}
+
+            <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: '#545b66' }}>
+              {filtered.length} trades
+            </span>
+
+            <button onClick={reset} style={{ fontSize: '0.65rem', padding: '0.3rem 0.6rem', borderRadius: 6, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', color: '#8b9099', cursor: 'pointer' }}>
+              ↑ Upload New
+            </button>
+          </div>
+        )}
+
+        {/* Trade Table */}
+        {filtered.length > 0 && (
           <div className="card" style={{ overflow: 'hidden' }}>
-            <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#f0f2f5' }}>
-                Trades ({groups.length})
-              </span>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button onClick={() => { setTrades([]); setGroups([]); setStats(null); setAnalysis(''); }}
-                  style={{ fontSize: '0.65rem', padding: '0.25rem 0.6rem', borderRadius: 4, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', color: '#8b9099', cursor: 'pointer' }}>
-                  Upload New
-                </button>
-                <span style={{ fontSize: '0.62rem', color: '#545b66', alignSelf: 'center' }}>Click a row to view chart</span>
-              </div>
-            </div>
             <div style={{ overflowX: 'auto' }}>
               <table className="data-table">
                 <thead>
                   <tr>
                     <th style={{ textAlign: 'left' }}>Symbol</th>
+                    <th style={{ textAlign: 'center' }}>Dir</th>
                     <th style={{ textAlign: 'center' }}>Result</th>
-                    <th style={{ textAlign: 'right' }}>P&L</th>
-                    <th style={{ textAlign: 'right' }}>P&L %</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('pnl')}>P&L<SortIcon field="pnl" /></th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('pnlPercent')}>P&L %<SortIcon field="pnlPercent" /></th>
                     <th style={{ textAlign: 'right' }}>Entry</th>
                     <th style={{ textAlign: 'right' }}>Exit</th>
-                    <th style={{ textAlign: 'right' }}>Hold Time</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('holdingTime')}>Held<SortIcon field="holdingTime" /></th>
                     <th style={{ textAlign: 'center' }}>Chart</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {groups.map((g, i) => (
+                  {filtered.map((g, i) => (
                     <tr key={i} onClick={() => setSelectedGroup(g)} style={{ cursor: 'pointer' }}>
                       <td>
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: '0.82rem', color: '#f0f2f5' }}>{g.symbol}</span>
-                        <div style={{ fontSize: '0.58rem', color: '#545b66' }}>{g.entries.length} entry · {g.exits.length} exit</div>
+                        <div style={{ fontSize: '0.58rem', color: '#545b66' }}>{g.entries.length} in · {g.exits.length} out</div>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 600, color: g.direction === 'long' ? '#00c878' : '#ff4d4d', textTransform: 'uppercase' }}>
+                          {g.direction === 'long' ? '↑ Long' : '↓ Short'}
+                        </span>
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <span style={{
                           display: 'inline-block', padding: '0.18rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', fontWeight: 700,
-                          background: g.pnl >= 0 ? 'rgba(0,200,120,0.12)' : 'rgba(255,77,77,0.12)',
-                          color: g.pnl >= 0 ? '#00c878' : '#ff4d4d',
+                          background: g.pnl > 0 ? 'rgba(0,200,120,0.12)' : 'rgba(255,77,77,0.12)',
+                          color: g.pnl > 0 ? '#00c878' : '#ff4d4d',
                         }}>
-                          {g.pnl >= 0 ? '✅ WIN' : '❌ LOSS'}
+                          {g.pnl > 0 ? '✅ WIN' : '❌ LOSS'}
                         </span>
                       </td>
                       <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', fontWeight: 600, color: g.pnl >= 0 ? '#00c878' : '#ff4d4d' }}>
@@ -518,16 +514,16 @@ export default function TradeJournal() {
                         </span>
                       </td>
                       <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#c9cdd3' }}>
-                        ${g.entryAvg.toFixed(g.entryAvg > 1 ? 2 : 6)}
+                        {fmtPrice(g.entryAvg)}
                       </td>
                       <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#c9cdd3' }}>
-                        ${g.exitAvg.toFixed(g.exitAvg > 1 ? 2 : 6)}
+                        {fmtPrice(g.exitAvg)}
                       </td>
                       <td style={{ textAlign: 'right', fontSize: '0.72rem', color: '#8b9099' }}>
                         {formatDuration(g.holdingTime)}
                       </td>
                       <td style={{ textAlign: 'center' }}>
-                        <span style={{ fontSize: '0.7rem', color: '#4f8cff', cursor: 'pointer' }}>📊 View</span>
+                        <span style={{ fontSize: '0.7rem', color: '#4f8cff' }}>📊</span>
                       </td>
                     </tr>
                   ))}
@@ -537,22 +533,24 @@ export default function TradeJournal() {
           </div>
         )}
 
-        {/* CSV Format Guide */}
-        {trades.length === 0 && (
-          <div className="card" style={{ padding: '1rem 1.25rem', marginTop: '1rem' }}>
-            <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#f0f2f5', marginBottom: '0.5rem' }}>📋 How to export your trades</div>
-            <div style={{ fontSize: '0.7rem', color: '#8b9099', lineHeight: 1.7 }}>
-              <p style={{ marginBottom: '0.5rem' }}><b style={{ color: '#f5a623' }}>Binance:</b> Trade History → Export Recent Trade History → Download CSV</p>
-              <p style={{ marginBottom: '0.5rem' }}><b style={{ color: '#f5a623' }}>Bybit:</b> Orders → Trade History → Export</p>
-              <p style={{ marginBottom: '0.5rem' }}><b style={{ color: '#f5a623' }}>OKX:</b> Assets → Order History → Export</p>
-              <p style={{ marginBottom: '0.5rem' }}><b style={{ color: '#f5a623' }}>Custom CSV:</b> Minimum columns needed: <code style={{ fontSize: '0.65rem', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>symbol, side, price</code> (+ optional: quantity, timestamp, fee)</p>
+        {/* Per-symbol breakdown */}
+        {stats?.symbolStats && stats.symbolStats.length > 1 && (
+          <div className="card" style={{ marginTop: '1rem', padding: '0.75rem 1rem' }}>
+            <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#f0f2f5', marginBottom: '0.5rem' }}>📊 By Symbol</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+              {stats.symbolStats.map((s: any) => (
+                <div key={s.symbol} style={{
+                  padding: '0.4rem 0.65rem', borderRadius: 6, fontSize: '0.68rem',
+                  background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+                  display: 'flex', gap: '0.5rem', alignItems: 'center',
+                }}>
+                  <b style={{ color: '#f0f2f5' }}>{s.symbol}</b>
+                  <span style={{ color: '#8b9099' }}>{s.trades} trades</span>
+                  <span style={{ color: s.pnl >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>${s.pnl.toFixed(2)}</span>
+                  <span style={{ color: '#8b9099' }}>{s.winRate}% WR</span>
+                </div>
+              ))}
             </div>
-          </div>
-        )}
-
-        {loading && (
-          <div style={{ textAlign: 'center', padding: '2rem', color: '#545b66', fontSize: '0.8rem' }}>
-            Analyzing your trades...
           </div>
         )}
       </div>
