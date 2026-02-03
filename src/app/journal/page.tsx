@@ -55,27 +55,59 @@ function fmtPrice(v: number): string {
 // CHART MODAL
 // ═══════════════════════════════════════════════
 
+const TIMEFRAMES = [
+  { label: '15m', value: '15m' },
+  { label: '1H', value: '1h' },
+  { label: '4H', value: '4h' },
+  { label: '1D', value: '1d' },
+];
+
+const CONTEXT_OPTIONS = [
+  { label: '1D', ms: 86400000 },
+  { label: '3D', ms: 259200000 },
+  { label: '1W', ms: 604800000 },
+  { label: '1M', ms: 2592000000 },
+  { label: '3M', ms: 7776000000 },
+  { label: 'MAX', ms: 31536000000 },
+];
+
 function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [interval, setInterval] = useState('1h');
+  const [contextMs, setContextMs] = useState(2592000000); // default 1 month
+  const [candleCount, setCandleCount] = useState(0);
 
+  // Fetch candles whenever interval or context changes
   useEffect(() => {
-    const allTimes = [...group.entries, ...group.exits].map(t => t.timestamp);
-    const start = Math.min(...allTimes);
-    const end = Math.max(...allTimes);
+    let cancelled = false;
+    const fetchData = async () => {
+      setLoading(true);
+      setError('');
+      const allTimes = [...group.entries, ...group.exits].map(t => t.timestamp);
+      const start = Math.min(...allTimes);
+      const end = Math.max(...allTimes);
 
-    fetch(`/api/candles?symbol=${group.symbol}&start=${start}&end=${end}`)
-      .then(r => r.json())
-      .then(data => {
+      try {
+        const res = await fetch(`/api/candles?symbol=${group.symbol}&start=${start}&end=${end}&interval=${interval}&context=${contextMs}`);
+        const data = await res.json();
+        if (cancelled) return;
         if (data.error) throw new Error(data.error);
         setCandles(data.candles || []);
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [group]);
+        setCandleCount(data.count || 0);
+      } catch (e: any) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchData();
+    return () => { cancelled = true; };
+  }, [group, interval, contextMs]);
 
+  // Render chart
   useEffect(() => {
     if (!chartRef.current || candles.length === 0) return;
     let chart: any;
@@ -86,11 +118,11 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
 
       chart = lc.createChart(chartRef.current!, {
         width: chartRef.current!.clientWidth,
-        height: 420,
+        height: 480,
         layout: { background: { type: lc.ColorType.Solid, color: '#0d1117' }, textColor: '#8b9099' },
         grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
         crosshair: { mode: lc.CrosshairMode.Normal },
-        timeScale: { timeVisible: true, secondsVisible: false, borderColor: 'rgba(255,255,255,0.06)' },
+        timeScale: { timeVisible: interval !== '1d', secondsVisible: false, borderColor: 'rgba(255,255,255,0.06)' },
         rightPriceScale: { borderColor: 'rgba(255,255,255,0.06)' },
       });
 
@@ -101,7 +133,20 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
       });
       series.setData(candles);
 
-      // Find nearest candle time for each trade marker
+      // Volume series
+      const volumeSeries = chart.addHistogramSeries({
+        color: '#26a69a',
+        priceFormat: { type: 'volume' },
+        priceScaleId: '',
+        scaleMargins: { top: 0.85, bottom: 0 },
+      });
+      volumeSeries.setData(candles.map(c => ({
+        time: c.time,
+        value: c.volume,
+        color: c.close >= c.open ? 'rgba(0,200,120,0.15)' : 'rgba(255,77,77,0.15)',
+      })));
+
+      // Find nearest candle time for markers
       const findNearestTime = (ts: number) => {
         const targetSec = Math.floor(ts / 1000);
         let best = candles[0].time;
@@ -114,45 +159,46 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
       };
 
       const markers: any[] = [];
-
       for (const t of group.entries) {
         markers.push({
           time: findNearestTime(t.timestamp),
-          position: 'belowBar',
-          color: '#00c878',
-          shape: 'arrowUp',
+          position: 'belowBar', color: '#00c878', shape: 'arrowUp',
           text: `BUY ${fmtPrice(t.price)}`,
         });
       }
       for (const t of group.exits) {
         markers.push({
           time: findNearestTime(t.timestamp),
-          position: 'aboveBar',
-          color: '#ff4d4d',
-          shape: 'arrowDown',
+          position: 'aboveBar', color: '#ff4d4d', shape: 'arrowDown',
           text: `SELL ${fmtPrice(t.price)}`,
         });
       }
-
       markers.sort((a, b) => a.time - b.time);
       series.setMarkers(markers);
 
       // Price lines for avg entry/exit
       series.createPriceLine({
         price: group.entryAvg, color: 'rgba(0,200,120,0.5)', lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: `Avg Entry ${fmtPrice(group.entryAvg)}`,
+        axisLabelVisible: true, title: `Entry ${fmtPrice(group.entryAvg)}`,
       });
       series.createPriceLine({
         price: group.exitAvg, color: 'rgba(255,77,77,0.5)', lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: `Avg Exit ${fmtPrice(group.exitAvg)}`,
+        axisLabelVisible: true, title: `Exit ${fmtPrice(group.exitAvg)}`,
       });
 
       chart.timeScale().fitContent();
+
+      // Handle resize
+      const handleResize = () => {
+        if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth });
+      };
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
     };
 
     init();
     return () => { if (chart) chart.remove(); };
-  }, [candles, group]);
+  }, [candles, group, interval]);
 
   // Close on Escape
   useEffect(() => {
@@ -161,13 +207,21 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  const btnStyle = (active: boolean) => ({
+    padding: '0.25rem 0.55rem', borderRadius: 4, fontSize: '0.65rem', fontWeight: 700 as const,
+    cursor: 'pointer' as const, border: 'none',
+    background: active ? 'rgba(79,140,255,0.2)' : 'rgba(255,255,255,0.04)',
+    color: active ? '#4f8cff' : '#8b9099',
+    transition: 'all 0.15s',
+  });
+
   return (
-    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, width: '100%', maxWidth: 1000, overflow: 'hidden' }}>
+    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.88)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, width: '100%', maxWidth: 1100, overflow: 'hidden' }}>
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: '1rem', color: '#f0f2f5' }}>{group.symbol}</span>
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: '1.1rem', color: '#f0f2f5' }}>{group.symbol}</span>
             <span style={{ fontSize: '0.65rem', color: '#8b9099', textTransform: 'uppercase' }}>{group.direction}</span>
             <span style={{
               fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: 4,
@@ -180,11 +234,36 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#8b9099', cursor: 'pointer', fontSize: '1.2rem', padding: '0.25rem' }}>✕</button>
         </div>
 
+        {/* Toolbar: Timeframe + Context */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.04)', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span style={{ fontSize: '0.6rem', color: '#545b66', fontWeight: 600, marginRight: '0.25rem' }}>INTERVAL</span>
+            {TIMEFRAMES.map(tf => (
+              <button key={tf.value} onClick={() => setInterval(tf.value)} style={btnStyle(interval === tf.value)}>
+                {tf.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span style={{ fontSize: '0.6rem', color: '#545b66', fontWeight: 600, marginRight: '0.25rem' }}>CONTEXT</span>
+            {CONTEXT_OPTIONS.map(ctx => (
+              <button key={ctx.label} onClick={() => setContextMs(ctx.ms)} style={btnStyle(contextMs === ctx.ms)}>
+                {ctx.label}
+              </button>
+            ))}
+          </div>
+          {!loading && <span style={{ fontSize: '0.6rem', color: '#545b66' }}>{candleCount} candles</span>}
+        </div>
+
         {/* Chart */}
-        <div style={{ padding: '0.5rem' }}>
-          {loading && <div style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#545b66' }}>Loading chart data for {group.symbol}...</div>}
-          {error && <div style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff4d4d', fontSize: '0.8rem' }}>⚠️ {error}</div>}
-          <div ref={chartRef} />
+        <div style={{ padding: '0.5rem', position: 'relative' }}>
+          {loading && (
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(13,17,23,0.8)', zIndex: 2 }}>
+              <span style={{ color: '#545b66', fontSize: '0.8rem' }}>Loading {interval} chart...</span>
+            </div>
+          )}
+          {error && !loading && <div style={{ height: 480, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff4d4d', fontSize: '0.8rem' }}>⚠️ {error}</div>}
+          <div ref={chartRef} style={{ minHeight: 480 }} />
         </div>
 
         {/* Trade details */}
