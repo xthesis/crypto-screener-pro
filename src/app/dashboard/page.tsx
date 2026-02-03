@@ -228,6 +228,7 @@ export default function Dashboard() {
           <div style={{ display: 'flex', gap: 4 }}>
             <Link href="/dashboard" className="active">Dashboard</Link>
             <Link href="/screener">Screener</Link>
+            <Link href="/patterns">Pattern Scanner</Link>
             <Link href="/formula/new">Formula Builder</Link>
           </div>
         </div>

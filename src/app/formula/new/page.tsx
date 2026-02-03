@@ -305,6 +305,7 @@ export default function FormulaBuilder() {
           <div style={{ display: 'flex', gap: 4 }}>
             <Link href="/dashboard">Dashboard</Link>
             <Link href="/screener">Screener</Link>
+            <Link href="/patterns">Pattern Scanner</Link>
             <Link href="/formula/new" className="active">Formula Builder</Link>
           </div>
         </div>

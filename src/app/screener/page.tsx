@@ -272,6 +272,7 @@ export default function Screener() {
           <div style={{ display: 'flex', gap: 4 }}>
             <Link href="/dashboard">Dashboard</Link>
             <Link href="/screener" className="active">Screener</Link>
+            <Link href="/patterns">Pattern Scanner</Link>
             <Link href="/formula/new">Formula Builder</Link>
           </div>
         </div>
