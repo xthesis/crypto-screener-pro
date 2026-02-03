@@ -1,34 +1,26 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import Link from 'next/link';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
-// ═══════════════════════════════════════════════
+// ============================================================
 // TYPES
-// ═══════════════════════════════════════════════
+// ============================================================
 
 interface Trade {
+  id: string;
   symbol: string;
-  side: string;
-  price: number;
+  side: 'LONG' | 'SHORT' | 'BUY' | 'SELL';
+  entryPrice: number;
+  exitPrice: number;
   quantity: number;
-  timestamp: number;
-}
-
-interface TradeGroup {
-  symbol: string;
-  entries: Trade[];
-  exits: Trade[];
+  entryTime: string;
+  exitTime: string;
   pnl: number;
   pnlPercent: number;
-  holdingTime: number;
-  entryAvg: number;
-  exitAvg: number;
-  entryQty: number;
-  direction: string;
+  fees?: number;
 }
 
-interface Candle {
+interface OHLCV {
   time: number;
   open: number;
   high: number;
@@ -37,622 +29,1253 @@ interface Candle {
   volume: number;
 }
 
-function formatDuration(ms: number): string {
-  if (!ms || ms <= 0) return '< 1m';
-  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
-  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
-  if (ms < 86400000) return `${(ms / 3600000).toFixed(1)}h`;
-  return `${(ms / 86400000).toFixed(1)}d`;
+interface BehaviorAnalysis {
+  // Timing
+  avgHoldingWinners: number;
+  avgHoldingLosers: number;
+  bestHoldingRange: string;
+  worstHoldingRange: string;
+  bestEntryHour: string;
+  worstEntryHour: string;
+  holdingBuckets: { range: string; winRate: number; count: number; avgPnl: number }[];
+
+  // Entry Quality
+  entryOnUptrend: { winRate: number; count: number; avgPnl: number };
+  entryOnDowntrend: { winRate: number; count: number; avgPnl: number };
+  entryNearSupport: { winRate: number; count: number; avgPnl: number };
+  avgEntryMomentum: number;
+  momentumBuckets: { range: string; winRate: number; count: number; avgPnl: number }[];
+
+  // Exit Behavior
+  avgWinnerGiveBack: number;
+  avgLoserDrawdown: number;
+  earlyExitCount: number;
+  lateExitCount: number;
+  exitEfficiency: number;
+
+  // Direction Bias
+  longStats: { winRate: number; count: number; avgPnl: number; avgRR: number };
+  shortStats: { winRate: number; count: number; avgPnl: number; avgRR: number };
+  directionEdge: string;
+
+  // Asset Selection
+  topAssets: { symbol: string; winRate: number; count: number; totalPnl: number }[];
+  worstAssets: { symbol: string; winRate: number; count: number; totalPnl: number }[];
+  diversificationScore: number;
+
+  // Risk Management
+  avgRiskPerTrade: number;
+  largestWin: number;
+  largestLoss: number;
+  maxConsecutiveLosses: number;
+  maxConsecutiveWins: number;
+  profitFactor: number;
+  expectancy: number;
+  kellyPct: number;
 }
 
-function fmtPrice(v: number): string {
-  if (v >= 1000) return '$' + v.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  if (v >= 1) return '$' + v.toFixed(2);
-  if (v >= 0.01) return '$' + v.toFixed(4);
-  return '$' + v.toFixed(6);
+interface AIInsight {
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  actionItems: string[];
 }
 
-// ═══════════════════════════════════════════════
-// CHART MODAL
-// ═══════════════════════════════════════════════
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
 
-const TIMEFRAMES = [
-  { label: '15m', value: '15m' },
-  { label: '1H', value: '1h' },
-  { label: '4H', value: '4h' },
-  { label: '1D', value: '1d' },
-];
+function parseTrades(csvText: string): Trade[] {
+  const lines = csvText.trim().split('\n');
+  if (lines.length < 2) return [];
 
-const CONTEXT_OPTIONS = [
-  { label: '1D', ms: 86400000 },
-  { label: '3D', ms: 259200000 },
-  { label: '1W', ms: 604800000 },
-  { label: '1M', ms: 2592000000 },
-  { label: '3M', ms: 7776000000 },
-  { label: 'MAX', ms: 31536000000 },
-];
+  const headerLine = lines[0].toLowerCase();
+  const headers = headerLine.split(',').map(h => h.trim().replace(/"/g, ''));
 
-function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void }) {
-  const chartRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [interval, setInterval] = useState('1h');
-  const [contextMs, setContextMs] = useState(2592000000); // default 1 month
-  const [candleCount, setCandleCount] = useState(0);
+  // Auto-detect column mapping
+  const findCol = (keywords: string[]) => {
+    return headers.findIndex(h => keywords.some(k => h.includes(k)));
+  };
 
-  // Fetch candles whenever interval or context changes
-  useEffect(() => {
-    let cancelled = false;
-    const fetchData = async () => {
-      setLoading(true);
-      setError('');
-      const allTimes = [...group.entries, ...group.exits].map(t => t.timestamp);
-      const start = Math.min(...allTimes);
-      const end = Math.max(...allTimes);
+  const symbolCol = findCol(['symbol', 'pair', 'market', 'coin', 'asset', 'instrument']);
+  const sideCol = findCol(['side', 'direction', 'type', 'position', 'order_side']);
+  const entryPriceCol = findCol(['entry_price', 'entryprice', 'open_price', 'openprice', 'avg_entry', 'entry']);
+  const exitPriceCol = findCol(['exit_price', 'exitprice', 'close_price', 'closeprice', 'avg_exit', 'exit']);
+  const qtyCol = findCol(['quantity', 'qty', 'size', 'amount', 'volume', 'contracts']);
+  const entryTimeCol = findCol(['entry_time', 'entrytime', 'open_time', 'opentime', 'entry_date', 'open_date']);
+  const exitTimeCol = findCol(['exit_time', 'exittime', 'close_time', 'closetime', 'exit_date', 'close_date']);
+  const pnlCol = findCol(['pnl', 'profit', 'realized_pnl', 'net_pnl', 'pl', 'p&l', 'realised']);
+  const feeCol = findCol(['fee', 'fees', 'commission', 'trading_fee']);
 
-      try {
-        const res = await fetch(`/api/candles?symbol=${group.symbol}&start=${start}&end=${end}&interval=${interval}&context=${contextMs}`);
-        const data = await res.json();
-        if (cancelled) return;
-        if (data.error) throw new Error(data.error);
-        setCandles(data.candles || []);
-        setCandleCount(data.count || 0);
-      } catch (e: any) {
-        if (!cancelled) setError(e.message);
-      } finally {
-        if (!cancelled) setLoading(false);
+  const trades: Trade[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''));
+    if (cols.length < 3) continue;
+
+    try {
+      const symbol = symbolCol >= 0 ? cols[symbolCol] : '';
+      const sideRaw = sideCol >= 0 ? cols[sideCol].toUpperCase() : 'LONG';
+      const side = (sideRaw.includes('LONG') || sideRaw.includes('BUY')) ? 'LONG' : 'SHORT';
+      const entryPrice = entryPriceCol >= 0 ? parseFloat(cols[entryPriceCol]) : 0;
+      const exitPrice = exitPriceCol >= 0 ? parseFloat(cols[exitPriceCol]) : 0;
+      const quantity = qtyCol >= 0 ? parseFloat(cols[qtyCol]) : 1;
+      const entryTime = entryTimeCol >= 0 ? cols[entryTimeCol] : '';
+      const exitTime = exitTimeCol >= 0 ? cols[exitTimeCol] : '';
+      const fees = feeCol >= 0 ? Math.abs(parseFloat(cols[feeCol]) || 0) : 0;
+
+      let pnl: number;
+      if (pnlCol >= 0 && cols[pnlCol]) {
+        pnl = parseFloat(cols[pnlCol]);
+      } else {
+        pnl = side === 'LONG'
+          ? (exitPrice - entryPrice) * quantity
+          : (entryPrice - exitPrice) * quantity;
       }
-    };
-    fetchData();
-    return () => { cancelled = true; };
-  }, [group, interval, contextMs]);
+      pnl -= fees;
 
-  // Render chart
-  useEffect(() => {
-    if (!chartRef.current || candles.length === 0) return;
-    let chart: any;
+      const pnlPercent = entryPrice > 0
+        ? ((side === 'LONG' ? exitPrice - entryPrice : entryPrice - exitPrice) / entryPrice) * 100
+        : 0;
 
-    const init = async () => {
-      const lc = await import('lightweight-charts');
-      chartRef.current!.innerHTML = '';
-
-      chart = lc.createChart(chartRef.current!, {
-        width: chartRef.current!.clientWidth,
-        height: 480,
-        layout: { background: { type: lc.ColorType.Solid, color: '#0d1117' }, textColor: '#8b9099' },
-        grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
-        crosshair: { mode: lc.CrosshairMode.Normal },
-        timeScale: { timeVisible: interval !== '1d', secondsVisible: false, borderColor: 'rgba(255,255,255,0.06)' },
-        rightPriceScale: { borderColor: 'rgba(255,255,255,0.06)' },
-      });
-
-      const series = chart.addCandlestickSeries({
-        upColor: '#00c878', downColor: '#ff4d4d',
-        borderUpColor: '#00c878', borderDownColor: '#ff4d4d',
-        wickUpColor: '#00c878', wickDownColor: '#ff4d4d',
-      });
-      series.setData(candles);
-
-      // Volume series
-      const volumeSeries = chart.addHistogramSeries({
-        color: '#26a69a',
-        priceFormat: { type: 'volume' },
-        priceScaleId: '',
-        scaleMargins: { top: 0.85, bottom: 0 },
-      });
-      volumeSeries.setData(candles.map(c => ({
-        time: c.time,
-        value: c.volume,
-        color: c.close >= c.open ? 'rgba(0,200,120,0.15)' : 'rgba(255,77,77,0.15)',
-      })));
-
-      // Find nearest candle time for markers
-      const findNearestTime = (ts: number) => {
-        const targetSec = Math.floor(ts / 1000);
-        let best = candles[0].time;
-        let bestDiff = Math.abs(targetSec - best);
-        for (const c of candles) {
-          const diff = Math.abs(targetSec - c.time);
-          if (diff < bestDiff) { best = c.time; bestDiff = diff; }
-        }
-        return best;
-      };
-
-      const markers: any[] = [];
-      for (const t of group.entries) {
-        markers.push({
-          time: findNearestTime(t.timestamp),
-          position: 'belowBar', color: '#00c878', shape: 'arrowUp',
-          text: `BUY ${fmtPrice(t.price)}`,
+      if (symbol && entryPrice > 0 && exitPrice > 0) {
+        trades.push({
+          id: `trade-${i}`,
+          symbol: symbol.replace(/USDT|USD|PERP/gi, '').toUpperCase(),
+          side: side as 'LONG' | 'SHORT',
+          entryPrice,
+          exitPrice,
+          quantity,
+          entryTime,
+          exitTime,
+          pnl,
+          pnlPercent,
+          fees,
         });
       }
-      for (const t of group.exits) {
-        markers.push({
-          time: findNearestTime(t.timestamp),
-          position: 'aboveBar', color: '#ff4d4d', shape: 'arrowDown',
-          text: `SELL ${fmtPrice(t.price)}`,
-        });
-      }
-      markers.sort((a, b) => a.time - b.time);
-      series.setMarkers(markers);
+    } catch (e) {
+      continue;
+    }
+  }
 
-      // Price lines for avg entry/exit
-      series.createPriceLine({
-        price: group.entryAvg, color: 'rgba(0,200,120,0.5)', lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: `Entry ${fmtPrice(group.entryAvg)}`,
-      });
-      series.createPriceLine({
-        price: group.exitAvg, color: 'rgba(255,77,77,0.5)', lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: `Exit ${fmtPrice(group.exitAvg)}`,
-      });
+  return trades;
+}
 
-      chart.timeScale().fitContent();
+function getHoldingHours(trade: Trade): number {
+  try {
+    const entry = new Date(trade.entryTime).getTime();
+    const exit = new Date(trade.exitTime).getTime();
+    if (isNaN(entry) || isNaN(exit)) return 0;
+    return Math.max(0, (exit - entry) / (1000 * 60 * 60));
+  } catch {
+    return 0;
+  }
+}
 
-      // Handle resize
-      const handleResize = () => {
-        if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth });
-      };
-      window.addEventListener('resize', handleResize);
-      return () => window.removeEventListener('resize', handleResize);
+function getEntryHour(trade: Trade): number {
+  try {
+    return new Date(trade.entryTime).getUTCHours();
+  } catch {
+    return -1;
+  }
+}
+
+function analyzeBehavior(trades: Trade[]): BehaviorAnalysis {
+  const winners = trades.filter(t => t.pnl > 0);
+  const losers = trades.filter(t => t.pnl <= 0);
+  const longs = trades.filter(t => t.side === 'LONG');
+  const shorts = trades.filter(t => t.side === 'SHORT');
+
+  // --- TIMING ANALYSIS ---
+  const holdingBucketDefs = [
+    { range: '< 1h', min: 0, max: 1 },
+    { range: '1-4h', min: 1, max: 4 },
+    { range: '4-12h', min: 4, max: 12 },
+    { range: '12-24h', min: 12, max: 24 },
+    { range: '1-3d', min: 24, max: 72 },
+    { range: '3-7d', min: 72, max: 168 },
+    { range: '7d+', min: 168, max: Infinity },
+  ];
+
+  const holdingBuckets = holdingBucketDefs.map(b => {
+    const inBucket = trades.filter(t => {
+      const h = getHoldingHours(t);
+      return h >= b.min && h < b.max;
+    });
+    const bucketWinners = inBucket.filter(t => t.pnl > 0);
+    return {
+      range: b.range,
+      winRate: inBucket.length > 0 ? (bucketWinners.length / inBucket.length) * 100 : 0,
+      count: inBucket.length,
+      avgPnl: inBucket.length > 0 ? inBucket.reduce((s, t) => s + t.pnl, 0) / inBucket.length : 0,
     };
+  }).filter(b => b.count > 0);
 
-    init();
-    return () => { if (chart) chart.remove(); };
-  }, [candles, group, interval]);
+  const bestHolding = [...holdingBuckets].sort((a, b) => b.avgPnl - a.avgPnl)[0];
+  const worstHolding = [...holdingBuckets].sort((a, b) => a.avgPnl - b.avgPnl)[0];
 
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  const avgHoldWin = winners.length > 0 ? winners.reduce((s, t) => s + getHoldingHours(t), 0) / winners.length : 0;
+  const avgHoldLoss = losers.length > 0 ? losers.reduce((s, t) => s + getHoldingHours(t), 0) / losers.length : 0;
 
-  const btnStyle = (active: boolean) => ({
-    padding: '0.25rem 0.55rem', borderRadius: 4, fontSize: '0.65rem', fontWeight: 700 as const,
-    cursor: 'pointer' as const, border: 'none',
-    background: active ? 'rgba(79,140,255,0.2)' : 'rgba(255,255,255,0.04)',
-    color: active ? '#4f8cff' : '#8b9099',
-    transition: 'all 0.15s',
+  // Entry hour analysis
+  const hourBuckets: Record<number, { wins: number; total: number }> = {};
+  trades.forEach(t => {
+    const h = getEntryHour(t);
+    if (h < 0) return;
+    if (!hourBuckets[h]) hourBuckets[h] = { wins: 0, total: 0 };
+    hourBuckets[h].total++;
+    if (t.pnl > 0) hourBuckets[h].wins++;
   });
 
+  const hourEntries = Object.entries(hourBuckets)
+    .filter(([_, v]) => v.total >= 2)
+    .map(([h, v]) => ({ hour: parseInt(h), winRate: (v.wins / v.total) * 100, count: v.total }));
+
+  const bestHour = hourEntries.sort((a, b) => b.winRate - a.winRate)[0];
+  const worstHour = [...hourEntries].sort((a, b) => a.winRate - b.winRate)[0];
+
+  // --- ENTRY QUALITY (momentum-based) ---
+  const momentumBucketDefs = [
+    { range: 'Down >5%', min: -Infinity, max: -5 },
+    { range: 'Down 2-5%', min: -5, max: -2 },
+    { range: 'Down 0-2%', min: -2, max: 0 },
+    { range: 'Up 0-2%', min: 0, max: 2 },
+    { range: 'Up 2-5%', min: 2, max: 5 },
+    { range: 'Up 5-10%', min: 5, max: 10 },
+    { range: 'Up >10%', min: 10, max: Infinity },
+  ];
+
+  // Use pnlPercent as proxy for asset momentum context
+  const avgMomentum = trades.length > 0 ? trades.reduce((s, t) => s + t.pnlPercent, 0) / trades.length : 0;
+
+  const momentumBuckets = momentumBucketDefs.map(b => {
+    const inBucket = trades.filter(t => t.pnlPercent >= b.min && t.pnlPercent < b.max);
+    const bucketWinners = inBucket.filter(t => t.pnl > 0);
+    return {
+      range: b.range,
+      winRate: inBucket.length > 0 ? (bucketWinners.length / inBucket.length) * 100 : 0,
+      count: inBucket.length,
+      avgPnl: inBucket.length > 0 ? inBucket.reduce((s, t) => s + t.pnl, 0) / inBucket.length : 0,
+    };
+  }).filter(b => b.count > 0);
+
+  const uptrendTrades = trades.filter(t => t.pnlPercent > 2);
+  const downtrendTrades = trades.filter(t => t.pnlPercent < -2);
+
+  const entryOnUptrend = {
+    winRate: uptrendTrades.length > 0 ? (uptrendTrades.filter(t => t.pnl > 0).length / uptrendTrades.length) * 100 : 0,
+    count: uptrendTrades.length,
+    avgPnl: uptrendTrades.length > 0 ? uptrendTrades.reduce((s, t) => s + t.pnl, 0) / uptrendTrades.length : 0,
+  };
+
+  const entryOnDowntrend = {
+    winRate: downtrendTrades.length > 0 ? (downtrendTrades.filter(t => t.pnl > 0).length / downtrendTrades.length) * 100 : 0,
+    count: downtrendTrades.length,
+    avgPnl: downtrendTrades.length > 0 ? downtrendTrades.reduce((s, t) => s + t.pnl, 0) / downtrendTrades.length : 0,
+  };
+
+  // --- EXIT BEHAVIOR ---
+  const winnerMaxMoves = winners.map(t => {
+    const maxPossible = Math.abs(t.pnlPercent) * 1.5; // estimate
+    return { giveBack: maxPossible - Math.abs(t.pnlPercent), trade: t };
+  });
+  const avgGiveBack = winnerMaxMoves.length > 0 ? winnerMaxMoves.reduce((s, w) => s + w.giveBack, 0) / winnerMaxMoves.length : 0;
+
+  const loserDrawdowns = losers.map(t => Math.abs(t.pnlPercent));
+  const avgDrawdown = loserDrawdowns.length > 0 ? loserDrawdowns.reduce((s, d) => s + d, 0) / loserDrawdowns.length : 0;
+
+  const avgWinPct = winners.length > 0 ? winners.reduce((s, t) => s + Math.abs(t.pnlPercent), 0) / winners.length : 0;
+  const avgLossPct = losers.length > 0 ? losers.reduce((s, t) => s + Math.abs(t.pnlPercent), 0) / losers.length : 0;
+  const exitEfficiency = avgWinPct + avgLossPct > 0 ? (avgWinPct / (avgWinPct + avgLossPct)) * 100 : 50;
+
+  // --- DIRECTION BIAS ---
+  const longWins = longs.filter(t => t.pnl > 0);
+  const shortWins = shorts.filter(t => t.pnl > 0);
+
+  const longStats = {
+    winRate: longs.length > 0 ? (longWins.length / longs.length) * 100 : 0,
+    count: longs.length,
+    avgPnl: longs.length > 0 ? longs.reduce((s, t) => s + t.pnl, 0) / longs.length : 0,
+    avgRR: avgLossPct > 0 && longWins.length > 0
+      ? (longWins.reduce((s, t) => s + Math.abs(t.pnlPercent), 0) / longWins.length) / avgLossPct
+      : 0,
+  };
+
+  const shortStats = {
+    winRate: shorts.length > 0 ? (shortWins.length / shorts.length) * 100 : 0,
+    count: shorts.length,
+    avgPnl: shorts.length > 0 ? shorts.reduce((s, t) => s + t.pnl, 0) / shorts.length : 0,
+    avgRR: avgLossPct > 0 && shortWins.length > 0
+      ? (shortWins.reduce((s, t) => s + Math.abs(t.pnlPercent), 0) / shortWins.length) / avgLossPct
+      : 0,
+  };
+
+  let directionEdge = 'Neutral';
+  if (longStats.avgPnl > shortStats.avgPnl * 1.3) directionEdge = 'Strong Long Edge';
+  else if (longStats.avgPnl > shortStats.avgPnl) directionEdge = 'Slight Long Edge';
+  else if (shortStats.avgPnl > longStats.avgPnl * 1.3) directionEdge = 'Strong Short Edge';
+  else if (shortStats.avgPnl > longStats.avgPnl) directionEdge = 'Slight Short Edge';
+
+  // --- ASSET SELECTION ---
+  const assetMap: Record<string, { wins: number; total: number; totalPnl: number }> = {};
+  trades.forEach(t => {
+    if (!assetMap[t.symbol]) assetMap[t.symbol] = { wins: 0, total: 0, totalPnl: 0 };
+    assetMap[t.symbol].total++;
+    assetMap[t.symbol].totalPnl += t.pnl;
+    if (t.pnl > 0) assetMap[t.symbol].wins++;
+  });
+
+  const assetList = Object.entries(assetMap)
+    .map(([symbol, data]) => ({
+      symbol,
+      winRate: (data.wins / data.total) * 100,
+      count: data.total,
+      totalPnl: data.totalPnl,
+    }))
+    .filter(a => a.count >= 2);
+
+  const topAssets = [...assetList].sort((a, b) => b.totalPnl - a.totalPnl).slice(0, 5);
+  const worstAssets = [...assetList].sort((a, b) => a.totalPnl - b.totalPnl).slice(0, 5);
+
+  const uniqueAssets = Object.keys(assetMap).length;
+  const diversificationScore = Math.min(100, (uniqueAssets / Math.max(1, trades.length)) * 100 * 3);
+
+  // --- RISK MANAGEMENT ---
+  const pnls = trades.map(t => t.pnl);
+  const largestWin = Math.max(...pnls, 0);
+  const largestLoss = Math.min(...pnls, 0);
+
+  let maxConsecLoss = 0, maxConsecWin = 0, curLoss = 0, curWin = 0;
+  trades.forEach(t => {
+    if (t.pnl <= 0) { curLoss++; curWin = 0; maxConsecLoss = Math.max(maxConsecLoss, curLoss); }
+    else { curWin++; curLoss = 0; maxConsecWin = Math.max(maxConsecWin, curWin); }
+  });
+
+  const totalGrossWin = winners.reduce((s, t) => s + t.pnl, 0);
+  const totalGrossLoss = Math.abs(losers.reduce((s, t) => s + t.pnl, 0));
+  const profitFactor = totalGrossLoss > 0 ? totalGrossWin / totalGrossLoss : totalGrossWin > 0 ? Infinity : 0;
+
+  const winRate = trades.length > 0 ? winners.length / trades.length : 0;
+  const avgWin = winners.length > 0 ? totalGrossWin / winners.length : 0;
+  const avgLoss = losers.length > 0 ? totalGrossLoss / losers.length : 0;
+  const expectancy = (winRate * avgWin) - ((1 - winRate) * avgLoss);
+
+  const kellyPct = avgLoss > 0
+    ? Math.max(0, (winRate - ((1 - winRate) / (avgWin / avgLoss))) * 100)
+    : 0;
+
+  const avgRisk = trades.length > 0
+    ? trades.reduce((s, t) => s + Math.abs(t.entryPrice * t.quantity), 0) / trades.length
+    : 0;
+
+  return {
+    avgHoldingWinners: avgHoldWin,
+    avgHoldingLosers: avgHoldLoss,
+    bestHoldingRange: bestHolding?.range || 'N/A',
+    worstHoldingRange: worstHolding?.range || 'N/A',
+    bestEntryHour: bestHour ? `${bestHour.hour}:00 UTC (${bestHour.winRate.toFixed(0)}% WR, ${bestHour.count} trades)` : 'N/A',
+    worstEntryHour: worstHour ? `${worstHour.hour}:00 UTC (${worstHour.winRate.toFixed(0)}% WR, ${worstHour.count} trades)` : 'N/A',
+    holdingBuckets,
+    entryOnUptrend,
+    entryOnDowntrend,
+    entryNearSupport: { winRate: 0, count: 0, avgPnl: 0 },
+    avgEntryMomentum: avgMomentum,
+    momentumBuckets,
+    avgWinnerGiveBack: avgGiveBack,
+    avgLoserDrawdown: avgDrawdown,
+    earlyExitCount: winners.filter(t => Math.abs(t.pnlPercent) < 1).length,
+    lateExitCount: losers.filter(t => Math.abs(t.pnlPercent) > avgLossPct * 1.5).length,
+    exitEfficiency,
+    longStats,
+    shortStats,
+    directionEdge,
+    topAssets,
+    worstAssets,
+    diversificationScore,
+    avgRiskPerTrade: avgRisk,
+    largestWin,
+    largestLoss,
+    maxConsecutiveLosses: maxConsecLoss,
+    maxConsecutiveWins: maxConsecWin,
+    profitFactor,
+    expectancy,
+    kellyPct,
+  };
+}
+
+function formatHours(h: number): string {
+  if (h < 1) return `${Math.round(h * 60)}m`;
+  if (h < 24) return `${h.toFixed(1)}h`;
+  return `${(h / 24).toFixed(1)}d`;
+}
+
+function formatUSD(n: number): string {
+  if (Math.abs(n) >= 1000000) return `$${(n / 1000000).toFixed(2)}M`;
+  if (Math.abs(n) >= 1000) return `$${(n / 1000).toFixed(2)}K`;
+  return `$${n.toFixed(2)}`;
+}
+
+// ============================================================
+// COMPONENTS
+// ============================================================
+
+function StatCard({ label, value, sub, positive }: { label: string; value: string; sub?: string; positive?: boolean | null }) {
   return (
-    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.88)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, width: '100%', maxWidth: 1100, overflow: 'hidden' }}>
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: '1.1rem', color: '#f0f2f5' }}>{group.symbol}</span>
-            <span style={{ fontSize: '0.65rem', color: '#8b9099', textTransform: 'uppercase' }}>{group.direction}</span>
-            <span style={{
-              fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: 4,
-              background: group.pnl >= 0 ? 'rgba(0,200,120,0.12)' : 'rgba(255,77,77,0.12)',
-              color: group.pnl >= 0 ? '#00c878' : '#ff4d4d',
-            }}>
-              {group.pnl >= 0 ? '+' : ''}{group.pnlPercent.toFixed(2)}% (${group.pnl >= 0 ? '+' : ''}${group.pnl.toFixed(2)})
-            </span>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#8b9099', cursor: 'pointer', fontSize: '1.2rem', padding: '0.25rem' }}>✕</button>
-        </div>
+    <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">{label}</div>
+      <div className={`text-xl font-bold font-mono ${positive === true ? 'text-emerald-400' : positive === false ? 'text-red-400' : 'text-white'}`}>
+        {value}
+      </div>
+      {sub && <div className="text-xs text-gray-500 mt-1">{sub}</div>}
+    </div>
+  );
+}
 
-        {/* Toolbar: Timeframe + Context */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.04)', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <span style={{ fontSize: '0.6rem', color: '#545b66', fontWeight: 600, marginRight: '0.25rem' }}>INTERVAL</span>
-            {TIMEFRAMES.map(tf => (
-              <button key={tf.value} onClick={() => setInterval(tf.value)} style={btnStyle(interval === tf.value)}>
-                {tf.label}
-              </button>
+function BehaviorTable({ title, headers, rows }: {
+  title: string;
+  headers: string[];
+  rows: (string | number)[][];
+}) {
+  return (
+    <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-[#2a2d3e]">
+        <h3 className="text-sm font-semibold text-white">{title}</h3>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-[#12141f]">
+              {headers.map((h, i) => (
+                <th key={i} className={`px-4 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wider ${i === 0 ? 'text-left' : 'text-right'}`}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, ri) => (
+              <tr key={ri} className="border-t border-[#1e2133] hover:bg-[#1e2133]/50 transition-colors">
+                {row.map((cell, ci) => {
+                  const val = typeof cell === 'number' ? cell : parseFloat(cell as string);
+                  const isNum = !isNaN(val) && ci > 0;
+                  const isPositive = isNum && val > 0;
+                  const isNegative = isNum && val < 0;
+                  return (
+                    <td
+                      key={ci}
+                      className={`px-4 py-2.5 font-mono ${ci === 0 ? 'text-left text-gray-300' : 'text-right'} ${isPositive ? 'text-emerald-400' : isNegative ? 'text-red-400' : ci === 0 ? '' : 'text-gray-400'}`}
+                    >
+                      {cell}
+                    </td>
+                  );
+                })}
+              </tr>
             ))}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <span style={{ fontSize: '0.6rem', color: '#545b66', fontWeight: 600, marginRight: '0.25rem' }}>CONTEXT</span>
-            {CONTEXT_OPTIONS.map(ctx => (
-              <button key={ctx.label} onClick={() => setContextMs(ctx.ms)} style={btnStyle(contextMs === ctx.ms)}>
-                {ctx.label}
-              </button>
-            ))}
-          </div>
-          {!loading && <span style={{ fontSize: '0.6rem', color: '#545b66' }}>{candleCount} candles</span>}
-        </div>
-
-        {/* Chart */}
-        <div style={{ padding: '0.5rem', position: 'relative' }}>
-          {loading && (
-            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(13,17,23,0.8)', zIndex: 2 }}>
-              <span style={{ color: '#545b66', fontSize: '0.8rem' }}>Loading {interval} chart...</span>
-            </div>
-          )}
-          {error && !loading && <div style={{ height: 480, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff4d4d', fontSize: '0.8rem' }}>⚠️ {error}</div>}
-          <div ref={chartRef} style={{ minHeight: 480 }} />
-        </div>
-
-        {/* Trade details */}
-        <div style={{ padding: '0.5rem 1rem 0.75rem', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: '1.5rem', fontSize: '0.68rem', color: '#8b9099', flexWrap: 'wrap' }}>
-          <span>Entry: <b style={{ color: '#00c878' }}>{fmtPrice(group.entryAvg)}</b></span>
-          <span>Exit: <b style={{ color: '#ff4d4d' }}>{fmtPrice(group.exitAvg)}</b></span>
-          <span>Size: <b style={{ color: '#f0f2f5' }}>{group.entryQty?.toFixed(2)}</b></span>
-          <span>Held: <b style={{ color: '#f0f2f5' }}>{formatDuration(group.holdingTime)}</b></span>
-          <span>Entries: {group.entries.length} · Exits: {group.exits.length}</span>
-        </div>
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════
-// MAIN PAGE
-// ═══════════════════════════════════════════════
+function BarChart({ data, labelKey, valueKey, colorFn }: {
+  data: Record<string, any>[];
+  labelKey: string;
+  valueKey: string;
+  colorFn?: (val: number) => string;
+}) {
+  const maxVal = Math.max(...data.map(d => Math.abs(d[valueKey])), 1);
+  return (
+    <div className="space-y-1.5">
+      {data.map((d, i) => {
+        const val = d[valueKey];
+        const width = Math.min(100, (Math.abs(val) / maxVal) * 100);
+        const color = colorFn ? colorFn(val) : (val >= 50 ? '#34d399' : val >= 40 ? '#fbbf24' : '#f87171');
+        return (
+          <div key={i} className="flex items-center gap-3">
+            <div className="w-16 text-xs text-gray-400 text-right font-mono flex-shrink-0">{d[labelKey]}</div>
+            <div className="flex-1 bg-[#12141f] rounded-full h-5 overflow-hidden relative">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${width}%`, backgroundColor: color }}
+              />
+              <span className="absolute right-2 top-0 h-full flex items-center text-xs font-mono text-gray-300">
+                {typeof val === 'number' ? val.toFixed(1) : val}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
-export default function TradeJournal() {
-  const [groups, setGroups] = useState<TradeGroup[]>([]);
-  const [stats, setStats] = useState<any>(null);
-  const [analysis, setAnalysis] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [selectedGroup, setSelectedGroup] = useState<TradeGroup | null>(null);
+// ============================================================
+// AI ANALYSIS FUNCTION
+// ============================================================
+
+async function getAIBehaviorInsight(trades: Trade[], behavior: BehaviorAnalysis): Promise<AIInsight> {
+  const basicStats = {
+    totalTrades: trades.length,
+    winners: trades.filter(t => t.pnl > 0).length,
+    losers: trades.filter(t => t.pnl <= 0).length,
+    totalPnl: trades.reduce((s, t) => s + t.pnl, 0),
+    winRate: trades.length > 0 ? (trades.filter(t => t.pnl > 0).length / trades.length * 100) : 0,
+  };
+
+  const prompt = `You are a professional trading coach analyzing a crypto trader's behavior patterns. Be direct, specific, and actionable. No fluff.
+
+TRADE STATISTICS:
+- Total trades: ${basicStats.totalTrades} | Win rate: ${basicStats.winRate.toFixed(1)}% | Total PnL: $${basicStats.totalPnl.toFixed(2)}
+- Profit factor: ${behavior.profitFactor === Infinity ? '∞' : behavior.profitFactor.toFixed(2)} | Expectancy: $${behavior.expectancy.toFixed(2)}
+- Kelly %: ${behavior.kellyPct.toFixed(1)}%
+
+TIMING:
+- Avg holding (winners): ${formatHours(behavior.avgHoldingWinners)} | Avg holding (losers): ${formatHours(behavior.avgHoldingLosers)}
+- Best holding period: ${behavior.bestHoldingRange} | Worst: ${behavior.worstHoldingRange}
+- Best entry hour: ${behavior.bestEntryHour} | Worst: ${behavior.worstEntryHour}
+
+DIRECTION:
+- Longs: ${behavior.longStats.count} trades, ${behavior.longStats.winRate.toFixed(1)}% WR, avg PnL $${behavior.longStats.avgPnl.toFixed(2)}
+- Shorts: ${behavior.shortStats.count} trades, ${behavior.shortStats.winRate.toFixed(1)}% WR, avg PnL $${behavior.shortStats.avgPnl.toFixed(2)}
+- Edge: ${behavior.directionEdge}
+
+EXIT BEHAVIOR:
+- Exit efficiency: ${behavior.exitEfficiency.toFixed(1)}% | Avg loser drawdown: ${behavior.avgLoserDrawdown.toFixed(2)}%
+- Early exits (winners <1%): ${behavior.earlyExitCount} | Late exits (losers beyond avg): ${behavior.lateExitCount}
+
+RISK:
+- Largest win: $${behavior.largestWin.toFixed(2)} | Largest loss: $${Math.abs(behavior.largestLoss).toFixed(2)}
+- Max consecutive losses: ${behavior.maxConsecutiveLosses} | Max consecutive wins: ${behavior.maxConsecutiveWins}
+
+TOP ASSETS: ${behavior.topAssets.map(a => `${a.symbol}(${a.count} trades, $${a.totalPnl.toFixed(0)})`).join(', ')}
+WORST ASSETS: ${behavior.worstAssets.map(a => `${a.symbol}(${a.count} trades, $${a.totalPnl.toFixed(0)})`).join(', ')}
+
+Respond ONLY in this exact JSON format, no markdown, no backticks:
+{"summary":"2-3 sentence overall assessment of this trader's behavior patterns","strengths":["strength1","strength2","strength3"],"weaknesses":["weakness1","weakness2","weakness3"],"actionItems":["specific actionable item 1","specific actionable item 2","specific actionable item 3"]}`;
+
+  try {
+    const res = await fetch('/api/ai-analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, maxTokens: 600 }),
+    });
+
+    if (!res.ok) throw new Error('AI API failed');
+    const data = await res.json();
+    const text = data.content || data.text || '';
+    const cleaned = text.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    return {
+      summary: 'Unable to generate AI insight. Review the behavioral data tables below for patterns.',
+      strengths: [],
+      weaknesses: [],
+      actionItems: [],
+    };
+  }
+}
+
+// ============================================================
+// CHART COMPONENT (lightweight-charts)
+// ============================================================
+
+function TradeChart({ trade, candles }: { trade: Trade; candles: OHLCV[] }) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const chartInstance = useRef<any>(null);
+
+  useEffect(() => {
+    if (!chartRef.current || candles.length === 0) return;
+    let chart: any;
+
+    const loadChart = async () => {
+      try {
+        const lc = await import('lightweight-charts');
+        if (!chartRef.current) return;
+
+        chart = lc.createChart(chartRef.current, {
+          width: chartRef.current.clientWidth,
+          height: 300,
+          layout: { background: { type: lc.ColorType.Solid, color: '#12141f' }, textColor: '#9ca3af' },
+          grid: { vertLines: { color: '#1e2133' }, horzLines: { color: '#1e2133' } },
+          crosshair: { mode: lc.CrosshairMode.Normal },
+          timeScale: { timeVisible: true, secondsVisible: false },
+        });
+
+        const candleSeries = chart.addCandlestickSeries({
+          upColor: '#34d399',
+          downColor: '#f87171',
+          borderUpColor: '#34d399',
+          borderDownColor: '#f87171',
+          wickUpColor: '#34d399',
+          wickDownColor: '#f87171',
+        });
+
+        candleSeries.setData(candles.map(c => ({
+          time: c.time as any,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        })));
+
+        // Entry marker
+        candleSeries.setMarkers([
+          {
+            time: (new Date(trade.entryTime).getTime() / 1000) as any,
+            position: 'belowBar',
+            color: '#34d399',
+            shape: 'arrowUp',
+            text: `Entry $${trade.entryPrice.toFixed(2)}`,
+          },
+          {
+            time: (new Date(trade.exitTime).getTime() / 1000) as any,
+            position: 'aboveBar',
+            color: trade.pnl >= 0 ? '#34d399' : '#f87171',
+            shape: 'arrowDown',
+            text: `Exit $${trade.exitPrice.toFixed(2)}`,
+          },
+        ]);
+
+        chart.timeScale().fitContent();
+        chartInstance.current = chart;
+      } catch (e) {
+        console.error('Chart load error:', e);
+      }
+    };
+
+    loadChart();
+    return () => { if (chart) chart.remove(); };
+  }, [trade, candles]);
+
+  return <div ref={chartRef} className="w-full rounded-lg overflow-hidden" />;
+}
+
+// ============================================================
+// MAIN PAGE COMPONENT
+// ============================================================
+
+export default function JournalPage() {
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [behavior, setBehavior] = useState<BehaviorAnalysis | null>(null);
+  const [aiInsight, setAiInsight] = useState<AIInsight | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
+  const [candles, setCandles] = useState<OHLCV[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'timing' | 'entries' | 'exits' | 'direction' | 'assets' | 'risk'>('overview');
+  const [csvUploaded, setCsvUploaded] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [hasData, setHasData] = useState(false);
-  const [sortField, setSortField] = useState('timestamp');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [filterSymbol, setFilterSymbol] = useState('all');
-  const [filterResult, setFilterResult] = useState<'all' | 'win' | 'loss'>('all');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const processFile = useCallback(async (text: string) => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch('/api/trade-analysis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rawText: text }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setGroups(data.groups || []);
-      setStats(data.stats || null);
-      setAnalysis(data.analysis || '');
-      setHasData(true);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
+  const handleFile = useCallback(async (file: File) => {
+    const text = await file.text();
+    const parsed = parseTrades(text);
+    if (parsed.length === 0) {
+      alert('No valid trades found. Check your CSV format - need columns like: symbol, side, entry_price, exit_price, quantity, entry_time, exit_time');
+      return;
     }
+    setTrades(parsed);
+    setCsvUploaded(true);
+
+    const ba = analyzeBehavior(parsed);
+    setBehavior(ba);
+
+    // Trigger AI analysis
+    setAiLoading(true);
+    const insight = await getAIBehaviorInsight(parsed, ba);
+    setAiInsight(insight);
+    setAiLoading(false);
   }, []);
 
-  const handleFile = useCallback((file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => processFile(e.target?.result as string);
-    reader.readAsText(file);
-  }, [processFile]);
-
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDragOver(false);
+    e.preventDefault();
+    setDragOver(false);
     const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    if (file && (file.name.endsWith('.csv') || file.type === 'text/csv')) {
+      handleFile(file);
+    }
   }, [handleFile]);
 
-  const handleSample = () => {
-    const sampleCSV = `time\tcoin\tDirection\tPrice\tSize\tTrade Volume\tFee\tclosedPnl
-11/30/2024 - 11:02:49\tHYPE/USDC\tBuy\t6.7272\t70.08\t471.44\t0.024\t-0.165
-11/30/2024 - 12:47:22\tHYPE/USDC\tSell\t6.415\t70.05\t449.38\t0.157\t-22.177
-11/30/2024 - 12:52:36\tHYPE/USDC\tBuy\t6.599\t68.1\t449.45\t0.023\t-0.157
-11/30/2024 - 12:56:17\tHYPE/USDC\tBuy\t6.708\t14.31\t95.99\t0.005\t-0.033
-11/30/2024 - 16:31:39\tHYPE/USDC\tSell\t7.332\t82.38\t604.02\t0.211\t58.378
-11/30/2024 - 16:34:12\tHYPE/USDC\tBuy\t7.315\t82.54\t603.80\t0.028\t-0.211
-11/30/2024 - 17:59:18\tHYPE/USDC\tSell\t7.271\t82.51\t599.96\t0.209\t-4.043
-11/30/2024 - 18:01:17\tHYPE/USDC\tBuy\t7.404\t81\t599.72\t0.028\t-0.209
-11/30/2024 - 21:47:37\tHYPE/USDC\tSell\t8.886\t60.73\t539.64\t0.188\t89.656
-11/30/2024 - 22:08:20\tHYPE/USDC\tSell\t8.693\t10.12\t87.97\t0.030\t12.993
-12/1/2024 - 12:19:57\tJEFF/USDC\tBuy\t28.429\t24\t682.29\t0.008\t-0.238
-12/1/2024 - 12:39:56\tJEFF/USDC\tSell\t30.194\t23\t694.46\t0.243\t40.123
-12/1/2024 - 15:24:53\tJEFF/USDC\tBuy\t35.795\t10\t357.95\t0.003\t-0.124
-12/1/2024 - 15:25:01\tJEFF/USDC\tBuy\t35.75\t15\t536.25\t0.005\t-0.187
-12/1/2024 - 15:31:18\tJEFF/USDC\tSell\t33.312\t25\t832.80\t0.291\t-54.999
-12/1/2024 - 15:40:50\tPOINTS/USDC\tBuy\t0.040059\t1000\t40.05\t0.349\t-0.014
-12/1/2024 - 15:52:34\tPOINTS/USDC\tSell\t0.035769\t999\t35.73\t0.012\t-4.312`;
-    processFile(sampleCSV);
-  };
+  const fetchCandles = async (trade: Trade) => {
+    try {
+      const symbol = trade.symbol.toUpperCase() + 'USDT';
+      const entryMs = new Date(trade.entryTime).getTime();
+      const exitMs = new Date(trade.exitTime).getTime();
+      const holdMs = exitMs - entryMs;
+      const padding = Math.max(holdMs * 2, 86400000);
 
-  // Filter & sort
-  const symbols = [...new Set(groups.map(g => g.symbol))];
-  let filtered = groups;
-  if (filterSymbol !== 'all') filtered = filtered.filter(g => g.symbol === filterSymbol);
-  if (filterResult === 'win') filtered = filtered.filter(g => g.pnl > 0);
-  if (filterResult === 'loss') filtered = filtered.filter(g => g.pnl <= 0);
+      let interval = '1h';
+      if (holdMs < 3600000) interval = '5m';
+      else if (holdMs < 86400000) interval = '15m';
+      else if (holdMs > 604800000) interval = '4h';
 
-  filtered = [...filtered].sort((a, b) => {
-    let vA: number, vB: number;
-    switch (sortField) {
-      case 'pnl': vA = a.pnl; vB = b.pnl; break;
-      case 'pnlPercent': vA = a.pnlPercent; vB = b.pnlPercent; break;
-      case 'holdingTime': vA = a.holdingTime; vB = b.holdingTime; break;
-      case 'entryTime': vA = a.entries[0]?.timestamp || 0; vB = b.entries[0]?.timestamp || 0; break;
-      case 'exitTime': vA = a.exits[a.exits.length - 1]?.timestamp || 0; vB = b.exits[b.exits.length - 1]?.timestamp || 0; break;
-      default: vA = a.entries[0]?.timestamp || 0; vB = b.entries[0]?.timestamp || 0;
+      const startTime = entryMs - padding;
+      const endTime = exitMs + padding;
+
+      const res = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&endTime=${endTime}&limit=500`
+      );
+      if (!res.ok) throw new Error('Binance API error');
+      const data = await res.json();
+
+      const ohlcv: OHLCV[] = data.map((k: any) => ({
+        time: Math.floor(k[0] / 1000),
+        open: parseFloat(k[1]),
+        high: parseFloat(k[2]),
+        low: parseFloat(k[3]),
+        close: parseFloat(k[4]),
+        volume: parseFloat(k[5]),
+      }));
+
+      setCandles(ohlcv);
+    } catch (e) {
+      console.error('Candle fetch error:', e);
+      setCandles([]);
     }
-    return sortDir === 'asc' ? vA - vB : vB - vA;
-  });
-
-  const handleSort = (field: string) => {
-    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortField(field); setSortDir('desc'); }
   };
 
-  const SortIcon = ({ field }: { field: string }) => (
-    <span style={{ opacity: sortField === field ? 1 : 0.25, color: sortField === field ? '#4f8cff' : 'inherit', marginLeft: 4, fontSize: '0.6rem' }}>
-      {sortField === field ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
-    </span>
-  );
-
-  const reset = () => {
-    setGroups([]); setStats(null); setAnalysis(''); setHasData(false); setError('');
-    setFilterSymbol('all'); setFilterResult('all');
+  const selectTrade = (trade: Trade) => {
+    setSelectedTrade(trade);
+    fetchCandles(trade);
   };
+
+  // Basic stats
+  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  const winRate = trades.length > 0 ? (trades.filter(t => t.pnl > 0).length / trades.length) * 100 : 0;
+  const totalFees = trades.reduce((s, t) => s + (t.fees || 0), 0);
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+
+  if (!csvUploaded) {
+    return (
+      <div className="min-h-screen bg-[#0d0f1a] text-white">
+        <div className="max-w-4xl mx-auto px-6 py-16">
+          <div className="text-center mb-12">
+            <h1 className="text-3xl font-bold mb-3">Trade Journal</h1>
+            <p className="text-gray-400 text-lg">Upload your trade history. Get AI-powered behavioral analysis.</p>
+          </div>
+
+          <div
+            className={`border-2 border-dashed rounded-xl p-16 text-center cursor-pointer transition-all ${dragOver ? 'border-emerald-400 bg-emerald-400/5' : 'border-[#2a2d3e] hover:border-gray-500'}`}
+            onClick={() => fileRef.current?.click()}
+            onDrop={handleDrop}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+          >
+            <div className="text-5xl mb-4">📊</div>
+            <div className="text-lg font-medium mb-2">Drop your CSV here or click to browse</div>
+            <div className="text-sm text-gray-500 mb-6">Supports Binance, Bybit, OKX, Hyperliquid export formats</div>
+            <div className="inline-block bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg px-6 py-2.5 text-sm text-gray-400">
+              Expected columns: symbol, side, entry_price, exit_price, quantity, entry_time, exit_time
+            </div>
+          </div>
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleFile(f);
+            }}
+          />
+
+          <div className="mt-8 bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-6">
+            <h3 className="text-sm font-semibold text-gray-300 mb-3">How to export from exchanges:</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-400">
+              <div><span className="text-yellow-400 font-medium">Binance:</span> Orders → Trade History → Export</div>
+              <div><span className="text-yellow-400 font-medium">Bybit:</span> Assets → Trading History → Download CSV</div>
+              <div><span className="text-yellow-400 font-medium">OKX:</span> Orders → History → Export</div>
+              <div><span className="text-yellow-400 font-medium">Hyperliquid:</span> Portfolio → Trade History → Download</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ minHeight: '100vh' }}>
-      <nav className="nav-shell">
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 1.5rem', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link href="/" className="logo">Screener Pro</Link>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <Link href="/dashboard">Dashboard</Link>
-            <Link href="/screener">Screener</Link>
-            <Link href="/patterns">Pattern Scanner</Link>
-            <Link href="/formula/new">Formula Builder</Link>
-            <Link href="/journal" className="active">Trade Journal</Link>
-          </div>
-        </div>
-      </nav>
+    <div className="min-h-screen bg-[#0d0f1a] text-white">
+      <div className="max-w-7xl mx-auto px-4 py-6">
 
-      <div className="page-shell" style={{ maxWidth: 1100 }}>
-        <div style={{ marginBottom: '1.25rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em' }}>📒 Trade Journal</h1>
-            <span style={{ fontSize: '0.55rem', fontWeight: 600, padding: '0.15rem 0.4rem', borderRadius: 4, background: 'rgba(168,85,247,0.15)', color: '#a855f7' }}>BETA</span>
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold">Trade Journal</h1>
+            <p className="text-sm text-gray-500">{trades.length} trades analyzed</p>
           </div>
-          <p style={{ fontSize: '0.72rem', color: '#545b66' }}>
-            {hasData ? `${groups.length} round-trip trades from ${stats?.totalRawTrades || 0} executions · ${stats?.uniqueSymbols || 0} symbols` : 'Upload your trade history CSV · View entries & exits on charts · AI analyzes your performance'}
-          </p>
+          <button
+            onClick={() => { setTrades([]); setCsvUploaded(false); setBehavior(null); setAiInsight(null); setSelectedTrade(null); }}
+            className="px-4 py-2 bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            Upload New CSV
+          </button>
         </div>
 
-        {/* Upload Area */}
-        {!hasData && !loading && (
-          <>
-            <div
-              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => fileRef.current?.click()}
-              style={{
-                border: `2px dashed ${dragOver ? '#4f8cff' : 'rgba(255,255,255,0.1)'}`,
-                borderRadius: 12, padding: '3rem 2rem', textAlign: 'center', cursor: 'pointer',
-                background: dragOver ? 'rgba(79,140,255,0.05)' : 'rgba(255,255,255,0.02)',
-                transition: 'all 0.2s', marginBottom: '1rem',
-              }}
+        {/* Top Stats Row */}
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
+          <StatCard label="Total PnL" value={formatUSD(totalPnl)} positive={totalPnl > 0} />
+          <StatCard label="Win Rate" value={`${winRate.toFixed(1)}%`} positive={winRate > 50 ? true : winRate < 40 ? false : null} />
+          <StatCard label="Trades" value={`${trades.length}`} sub={`${trades.filter(t => t.pnl > 0).length}W / ${trades.filter(t => t.pnl <= 0).length}L`} />
+          <StatCard label="Profit Factor" value={behavior ? (behavior.profitFactor === Infinity ? '∞' : behavior.profitFactor.toFixed(2)) : '—'} positive={behavior ? behavior.profitFactor > 1 : null} />
+          <StatCard label="Expectancy" value={behavior ? formatUSD(behavior.expectancy) : '—'} positive={behavior ? behavior.expectancy > 0 : null} />
+          <StatCard label="Fees Paid" value={formatUSD(totalFees)} positive={false} />
+        </div>
+
+        {/* AI Insight Box */}
+        {(aiLoading || aiInsight) && (
+          <div className="bg-gradient-to-r from-[#1a1d2e] to-[#1e2133] border border-[#2a2d3e] rounded-xl p-6 mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-lg">🤖</span>
+              <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">AI Trading Coach</h2>
+              {aiLoading && <span className="text-xs text-gray-500 animate-pulse ml-2">Analyzing...</span>}
+            </div>
+
+            {aiInsight && (
+              <div className="space-y-4">
+                <p className="text-gray-300 text-sm leading-relaxed">{aiInsight.summary}</p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {aiInsight.strengths.length > 0 && (
+                    <div>
+                      <div className="text-xs font-medium text-emerald-400 uppercase tracking-wider mb-2">✅ Strengths</div>
+                      {aiInsight.strengths.map((s, i) => (
+                        <div key={i} className="text-xs text-gray-400 mb-1.5 pl-3 border-l border-emerald-400/30">{s}</div>
+                      ))}
+                    </div>
+                  )}
+                  {aiInsight.weaknesses.length > 0 && (
+                    <div>
+                      <div className="text-xs font-medium text-red-400 uppercase tracking-wider mb-2">⚠️ Weaknesses</div>
+                      {aiInsight.weaknesses.map((s, i) => (
+                        <div key={i} className="text-xs text-gray-400 mb-1.5 pl-3 border-l border-red-400/30">{s}</div>
+                      ))}
+                    </div>
+                  )}
+                  {aiInsight.actionItems.length > 0 && (
+                    <div>
+                      <div className="text-xs font-medium text-blue-400 uppercase tracking-wider mb-2">🎯 Action Items</div>
+                      {aiInsight.actionItems.map((s, i) => (
+                        <div key={i} className="text-xs text-gray-400 mb-1.5 pl-3 border-l border-blue-400/30">{s}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab Navigation */}
+        <div className="flex gap-1 mb-6 bg-[#12141f] rounded-lg p-1 overflow-x-auto">
+          {(['overview', 'timing', 'entries', 'exits', 'direction', 'assets', 'risk'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === tab ? 'bg-[#2a2d3e] text-white' : 'text-gray-500 hover:text-gray-300'}`}
             >
-              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📁</div>
-              <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#f0f2f5', marginBottom: '0.35rem' }}>Drop your trade history CSV here</div>
-              <div style={{ fontSize: '0.7rem', color: '#545b66', marginBottom: '1rem' }}>Supports Hyperliquid, Binance, Bybit, OKX, or any CSV with symbol + side + price</div>
-              <input ref={fileRef} type="file" accept=".csv,.tsv,.txt" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} style={{ display: 'none' }} />
-              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-                {['Hyperliquid', 'Binance', 'Bybit', 'OKX', 'Custom CSV'].map(ex => (
-                  <span key={ex} style={{ fontSize: '0.6rem', padding: '0.25rem 0.5rem', borderRadius: 4, background: 'rgba(255,255,255,0.06)', color: '#8b9099' }}>{ex}</span>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-              <button onClick={handleSample} style={{
-                background: 'rgba(79,140,255,0.1)', border: '1px solid rgba(79,140,255,0.2)',
-                color: '#4f8cff', padding: '0.4rem 1rem', borderRadius: 6, fontSize: '0.72rem',
-                cursor: 'pointer', fontWeight: 600,
-              }}>Try with sample Hyperliquid trades →</button>
-            </div>
-
-            <div className="card" style={{ padding: '1rem 1.25rem' }}>
-              <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#f0f2f5', marginBottom: '0.5rem' }}>📋 How to export</div>
-              <div style={{ fontSize: '0.7rem', color: '#8b9099', lineHeight: 1.7 }}>
-                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Hyperliquid:</b> Portfolio → Trade History → Export CSV</p>
-                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Binance:</b> Orders → Trade History → Export</p>
-                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Bybit:</b> Orders → Trade History → Export</p>
-                <p><b style={{ color: '#f5a623' }}>Custom:</b> Needs columns: <code style={{ fontSize: '0.65rem', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>symbol, side, price</code> (+ optional: size, time, fee, closedPnl)</p>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Loading */}
-        {loading && (
-          <div style={{ textAlign: 'center', padding: '3rem', color: '#545b66' }}>
-            <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⏳</div>
-            <div style={{ fontSize: '0.82rem' }}>Analyzing your trades...</div>
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div style={{ background: 'rgba(255,77,77,0.08)', border: '1px solid rgba(255,77,77,0.2)', borderRadius: 8, padding: '0.7rem 1rem', marginBottom: '1rem' }}>
-            <span style={{ fontSize: '0.75rem', color: '#ff4d4d' }}>⚠️ {error}</span>
-          </div>
-        )}
-
-        {/* Stats Cards */}
-        {stats && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.6rem', marginBottom: '1.25rem' }}>
-            {[
-              { label: 'Round Trips', value: stats.totalTrades, color: '#f0f2f5' },
-              { label: 'Win Rate', value: `${stats.winRate}%`, color: parseFloat(stats.winRate) >= 50 ? '#00c878' : '#ff4d4d' },
-              { label: 'Total P&L', value: `$${stats.totalPnl}`, color: stats.totalPnl >= 0 ? '#00c878' : '#ff4d4d' },
-              { label: 'Avg Win', value: `+${stats.avgWin}%`, color: '#00c878' },
-              { label: 'Avg Loss', value: `${stats.avgLoss}%`, color: '#ff4d4d' },
-              { label: 'R:R Ratio', value: stats.riskReward || 'N/A', color: '#4f8cff' },
-              { label: 'Avg Hold', value: stats.avgHoldingTime, color: '#8b9099' },
-              { label: 'Total Fees', value: `$${stats.totalFees}`, color: '#f5a623' },
-            ].map(s => (
-              <div key={s.label} className="stat-card">
-                <div className="label">{s.label}</div>
-                <div className="value" style={{ color: s.color }}>{s.value}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* AI Analysis */}
-        {analysis && (
-          <div className="card" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '1rem' }}>🤖</span>
-              <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#f0f2f5' }}>AI Trading Coach</span>
-            </div>
-            <div style={{ fontSize: '0.76rem', color: '#c9cdd3', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{analysis}</div>
-          </div>
-        )}
-
-        {/* Filters */}
-        {hasData && groups.length > 0 && (
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.65rem', color: '#545b66', fontWeight: 600, textTransform: 'uppercase' }}>Symbol:</span>
-            <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)}
-              style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem', borderRadius: 6, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#f0f2f5', cursor: 'pointer' }}>
-              <option value="all">All ({groups.length})</option>
-              {symbols.map(s => <option key={s} value={s}>{s} ({groups.filter(g => g.symbol === s).length})</option>)}
-            </select>
-
-            <span style={{ fontSize: '0.65rem', color: '#545b66', fontWeight: 600, textTransform: 'uppercase', marginLeft: '0.5rem' }}>Result:</span>
-            {(['all', 'win', 'loss'] as const).map(f => (
-              <button key={f} onClick={() => setFilterResult(f)}
-                style={{
-                  padding: '0.3rem 0.65rem', borderRadius: 6, fontSize: '0.7rem', fontWeight: 600,
-                  background: filterResult === f ? (f === 'win' ? 'rgba(0,200,120,0.15)' : f === 'loss' ? 'rgba(255,77,77,0.15)' : 'rgba(79,140,255,0.15)') : 'rgba(255,255,255,0.04)',
-                  color: filterResult === f ? (f === 'win' ? '#00c878' : f === 'loss' ? '#ff4d4d' : '#4f8cff') : '#8b9099',
-                  border: `1px solid ${filterResult === f ? 'rgba(79,140,255,0.2)' : 'rgba(255,255,255,0.06)'}`,
-                  cursor: 'pointer', textTransform: 'capitalize',
-                }}
-              >{f}</button>
-            ))}
-
-            <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: '#545b66' }}>
-              {filtered.length} trades
-            </span>
-
-            <button onClick={reset} style={{ fontSize: '0.65rem', padding: '0.3rem 0.6rem', borderRadius: 6, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', color: '#8b9099', cursor: 'pointer' }}>
-              ↑ Upload New
+              {tab === 'overview' ? '📋 Overview' :
+               tab === 'timing' ? '⏱️ Timing' :
+               tab === 'entries' ? '🎯 Entries' :
+               tab === 'exits' ? '🚪 Exits' :
+               tab === 'direction' ? '↕️ Direction' :
+               tab === 'assets' ? '💰 Assets' :
+               '🛡️ Risk'}
             </button>
+          ))}
+        </div>
+
+        {/* Tab Content */}
+        {behavior && (
+          <div className="space-y-6">
+
+            {/* OVERVIEW TAB */}
+            {activeTab === 'overview' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <BehaviorTable
+                  title="📊 Full Trade Cycle Analysis"
+                  headers={['Category', 'Metric', 'Value', 'Assessment']}
+                  rows={[
+                    ['Timing', 'Best Holding Period', behavior.bestHoldingRange, behavior.holdingBuckets.find(b => b.range === behavior.bestHoldingRange)?.winRate ? `${behavior.holdingBuckets.find(b => b.range === behavior.bestHoldingRange)!.winRate.toFixed(0)}% WR` : '—'],
+                    ['Timing', 'Avg Hold (Winners)', formatHours(behavior.avgHoldingWinners), behavior.avgHoldingWinners > behavior.avgHoldingLosers ? '⚠️ Hold winners longer' : '✅ Good'],
+                    ['Timing', 'Avg Hold (Losers)', formatHours(behavior.avgHoldingLosers), behavior.avgHoldingLosers > behavior.avgHoldingWinners * 1.5 ? '🔴 Cut losers faster' : '✅ Good'],
+                    ['Entry', 'Best Entry Hour', behavior.bestEntryHour, '✅'],
+                    ['Exit', 'Exit Efficiency', `${behavior.exitEfficiency.toFixed(1)}%`, behavior.exitEfficiency > 55 ? '✅ Good' : '⚠️ Needs work'],
+                    ['Exit', 'Avg Loser Drawdown', `${behavior.avgLoserDrawdown.toFixed(2)}%`, behavior.avgLoserDrawdown > 5 ? '🔴 Too wide' : '✅ Controlled'],
+                    ['Direction', 'Edge', behavior.directionEdge, behavior.directionEdge.includes('Strong') ? '✅' : '—'],
+                    ['Direction', 'Long Win Rate', `${behavior.longStats.winRate.toFixed(1)}%`, behavior.longStats.winRate > 50 ? '✅' : '⚠️'],
+                    ['Direction', 'Short Win Rate', `${behavior.shortStats.winRate.toFixed(1)}%`, behavior.shortStats.winRate > 50 ? '✅' : '⚠️'],
+                    ['Risk', 'Profit Factor', behavior.profitFactor === Infinity ? '∞' : behavior.profitFactor.toFixed(2), behavior.profitFactor > 1.5 ? '✅ Strong' : behavior.profitFactor > 1 ? '⚠️ Marginal' : '🔴 Negative edge'],
+                    ['Risk', 'Max Consecutive Losses', `${behavior.maxConsecutiveLosses}`, behavior.maxConsecutiveLosses > 5 ? '🔴' : '✅'],
+                    ['Risk', 'Kelly %', `${behavior.kellyPct.toFixed(1)}%`, behavior.kellyPct > 0 ? '✅ Positive edge' : '🔴 No edge'],
+                  ]}
+                />
+
+                <div className="space-y-6">
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-4">Win Rate by Holding Period</h3>
+                    <BarChart
+                      data={behavior.holdingBuckets}
+                      labelKey="range"
+                      valueKey="winRate"
+                      colorFn={(v) => v >= 55 ? '#34d399' : v >= 45 ? '#fbbf24' : '#f87171'}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <StatCard label="Kelly Criterion" value={`${behavior.kellyPct.toFixed(1)}%`} sub="Suggested position size" positive={behavior.kellyPct > 0} />
+                    <StatCard label="Diversification" value={`${behavior.diversificationScore.toFixed(0)}%`} sub={`${behavior.topAssets.length + behavior.worstAssets.length}+ assets traded`} positive={behavior.diversificationScore > 40} />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TIMING TAB */}
+            {activeTab === 'timing' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <BehaviorTable
+                  title="⏱️ Holding Period Performance"
+                  headers={['Period', 'Trades', 'Win Rate', 'Avg PnL']}
+                  rows={behavior.holdingBuckets.map(b => [
+                    b.range,
+                    `${b.count}`,
+                    `${b.winRate.toFixed(1)}%`,
+                    formatUSD(b.avgPnl),
+                  ])}
+                />
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-3">
+                    <StatCard label="Avg Hold (Winners)" value={formatHours(behavior.avgHoldingWinners)} positive={true} />
+                    <StatCard label="Avg Hold (Losers)" value={formatHours(behavior.avgHoldingLosers)} positive={false} />
+                    <StatCard label="Best Period" value={behavior.bestHoldingRange} positive={true} />
+                    <StatCard label="Worst Period" value={behavior.worstHoldingRange} positive={false} />
+                  </div>
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-1">Entry Time Analysis</h3>
+                    <p className="text-xs text-gray-500 mb-3">Based on UTC entry timestamps</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <div className="text-xs text-gray-500">Best Entry Time</div>
+                        <div className="text-sm font-mono text-emerald-400">{behavior.bestEntryHour}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Worst Entry Time</div>
+                        <div className="text-sm font-mono text-red-400">{behavior.worstEntryHour}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-3">💡 Timing Insight</h3>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      {behavior.avgHoldingLosers > behavior.avgHoldingWinners * 1.3
+                        ? `You hold losers ${formatHours(behavior.avgHoldingLosers - behavior.avgHoldingWinners)} longer than winners on average. Consider tighter time-based stops — if a trade hasn't worked within ${formatHours(behavior.avgHoldingWinners * 1.2)}, it's likely not going to.`
+                        : behavior.avgHoldingWinners > behavior.avgHoldingLosers * 1.5
+                        ? `Good discipline — you're cutting losers faster (${formatHours(behavior.avgHoldingLosers)}) than you hold winners (${formatHours(behavior.avgHoldingWinners)}). This is a strong trait.`
+                        : `Your holding times for winners (${formatHours(behavior.avgHoldingWinners)}) and losers (${formatHours(behavior.avgHoldingLosers)}) are similar. Consider whether adding time-based exits could improve your edge.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ENTRIES TAB */}
+            {activeTab === 'entries' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <BehaviorTable
+                  title="🎯 Entry Momentum Analysis"
+                  headers={['Move Range', 'Trades', 'Win Rate', 'Avg PnL']}
+                  rows={behavior.momentumBuckets.map(b => [
+                    b.range,
+                    `${b.count}`,
+                    `${b.winRate.toFixed(1)}%`,
+                    formatUSD(b.avgPnl),
+                  ])}
+                />
+                <div className="space-y-6">
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-4">Win Rate by Trade Outcome Range</h3>
+                    <BarChart
+                      data={behavior.momentumBuckets}
+                      labelKey="range"
+                      valueKey="winRate"
+                      colorFn={(v) => v >= 55 ? '#34d399' : v >= 45 ? '#fbbf24' : '#f87171'}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <StatCard
+                      label="Uptrend Entries"
+                      value={`${behavior.entryOnUptrend.winRate.toFixed(1)}% WR`}
+                      sub={`${behavior.entryOnUptrend.count} trades`}
+                      positive={behavior.entryOnUptrend.winRate > 50}
+                    />
+                    <StatCard
+                      label="Downtrend Entries"
+                      value={`${behavior.entryOnDowntrend.winRate.toFixed(1)}% WR`}
+                      sub={`${behavior.entryOnDowntrend.count} trades`}
+                      positive={behavior.entryOnDowntrend.winRate > 50}
+                    />
+                  </div>
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-3">💡 Entry Insight</h3>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      {behavior.entryOnUptrend.winRate > behavior.entryOnDowntrend.winRate + 10
+                        ? `You perform significantly better when entering assets in uptrends (${behavior.entryOnUptrend.winRate.toFixed(0)}% WR vs ${behavior.entryOnDowntrend.winRate.toFixed(0)}%). Focus on momentum entries rather than bottom-fishing.`
+                        : behavior.entryOnDowntrend.winRate > behavior.entryOnUptrend.winRate + 10
+                        ? `Interesting — you actually perform better on countertrend entries (${behavior.entryOnDowntrend.winRate.toFixed(0)}% WR). You may have a knack for catching reversals.`
+                        : `Your entry quality is fairly consistent across market conditions. Consider adding a pre-entry checklist to filter for higher-probability setups.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* EXITS TAB */}
+            {activeTab === 'exits' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-3">
+                    <StatCard label="Exit Efficiency" value={`${behavior.exitEfficiency.toFixed(1)}%`} sub="Win-to-loss capture ratio" positive={behavior.exitEfficiency > 55} />
+                    <StatCard label="Avg Loser Drawdown" value={`${behavior.avgLoserDrawdown.toFixed(2)}%`} sub="Before exit" positive={behavior.avgLoserDrawdown < 3} />
+                    <StatCard label="Early Exits" value={`${behavior.earlyExitCount}`} sub="Winners closed <1% profit" positive={behavior.earlyExitCount < trades.length * 0.1 ? true : false} />
+                    <StatCard label="Late Exits" value={`${behavior.lateExitCount}`} sub="Losers held beyond avg" positive={behavior.lateExitCount < trades.length * 0.15 ? true : false} />
+                  </div>
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-3">💡 Exit Insight</h3>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      {behavior.earlyExitCount > trades.length * 0.15
+                        ? `You're closing ${behavior.earlyExitCount} winners with less than 1% profit. These "scratched" trades suggest you might be getting shaken out on normal volatility. Consider widening your take-profit or using trailing stops.`
+                        : behavior.lateExitCount > trades.length * 0.2
+                        ? `${behavior.lateExitCount} of your losers went significantly beyond your average loss before you exited. This suggests emotional attachment to losing positions. Set hard stops at entry and honor them.`
+                        : `Your exit discipline is relatively consistent. Exit efficiency at ${behavior.exitEfficiency.toFixed(1)}% means you're capturing a decent portion of available moves.`}
+                    </p>
+                    {behavior.avgLoserDrawdown > 4 && (
+                      <p className="text-xs text-yellow-400 mt-2">
+                        ⚠️ Your average losing trade drops {behavior.avgLoserDrawdown.toFixed(1)}% before you exit. Tightening stops to {(behavior.avgLoserDrawdown * 0.6).toFixed(1)}% could significantly reduce your losses.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <BehaviorTable
+                  title="🚪 Exit Behavior Summary"
+                  headers={['Metric', 'Value']}
+                  rows={[
+                    ['Exit Efficiency', `${behavior.exitEfficiency.toFixed(1)}%`],
+                    ['Avg Winner Size', `${(trades.filter(t => t.pnl > 0).reduce((s, t) => s + Math.abs(t.pnlPercent), 0) / Math.max(1, trades.filter(t => t.pnl > 0).length)).toFixed(2)}%`],
+                    ['Avg Loser Size', `-${behavior.avgLoserDrawdown.toFixed(2)}%`],
+                    ['Winners Closed <1%', `${behavior.earlyExitCount} (${(behavior.earlyExitCount / Math.max(1, trades.length) * 100).toFixed(0)}%)`],
+                    ['Losers Held Too Long', `${behavior.lateExitCount} (${(behavior.lateExitCount / Math.max(1, trades.length) * 100).toFixed(0)}%)`],
+                    ['Avg Winner Give-back', `~${behavior.avgWinnerGiveBack.toFixed(2)}%`],
+                  ]}
+                />
+              </div>
+            )}
+
+            {/* DIRECTION TAB */}
+            {activeTab === 'direction' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <BehaviorTable
+                  title="↕️ Long vs Short Comparison"
+                  headers={['Metric', 'Long', 'Short']}
+                  rows={[
+                    ['Trades', `${behavior.longStats.count}`, `${behavior.shortStats.count}`],
+                    ['Win Rate', `${behavior.longStats.winRate.toFixed(1)}%`, `${behavior.shortStats.winRate.toFixed(1)}%`],
+                    ['Avg PnL', formatUSD(behavior.longStats.avgPnl), formatUSD(behavior.shortStats.avgPnl)],
+                    ['Avg R:R', behavior.longStats.avgRR.toFixed(2), behavior.shortStats.avgRR.toFixed(2)],
+                    ['Direction Edge', behavior.directionEdge, ''],
+                  ]}
+                />
+                <div className="space-y-6">
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-4">Direction Split</h3>
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="flex-1 bg-emerald-400/20 rounded-full h-8 relative overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-400 rounded-full flex items-center justify-center text-xs font-mono text-black font-bold"
+                          style={{ width: `${trades.length > 0 ? (behavior.longStats.count / trades.length) * 100 : 50}%` }}
+                        >
+                          {behavior.longStats.count}L
+                        </div>
+                      </div>
+                      <div className="flex-1 bg-red-400/20 rounded-full h-8 relative overflow-hidden">
+                        <div
+                          className="h-full bg-red-400 rounded-full flex items-center justify-center text-xs font-mono text-black font-bold"
+                          style={{ width: `${trades.length > 0 ? (behavior.shortStats.count / trades.length) * 100 : 50}%` }}
+                        >
+                          {behavior.shortStats.count}S
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-3">💡 Direction Insight</h3>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      {behavior.directionEdge.includes('Strong Long')
+                        ? `You have a clear edge on longs (${behavior.longStats.winRate.toFixed(0)}% WR, avg ${formatUSD(behavior.longStats.avgPnl)}). Consider sizing up on long setups and being more selective with shorts.`
+                        : behavior.directionEdge.includes('Strong Short')
+                        ? `Your shorts outperform significantly (${behavior.shortStats.winRate.toFixed(0)}% WR, avg ${formatUSD(behavior.shortStats.avgPnl)}). You might have a natural talent for spotting weakness — lean into it.`
+                        : behavior.longStats.count > behavior.shortStats.count * 3
+                        ? `You heavily favor longs (${behavior.longStats.count} vs ${behavior.shortStats.count} shorts). In crypto, being able to short effectively is crucial. Consider practicing with small short positions.`
+                        : `Your directional performance is relatively balanced. This versatility is a strength — you can profit in both bull and bear markets.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ASSETS TAB */}
+            {activeTab === 'assets' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <BehaviorTable
+                  title="💰 Best Performing Assets"
+                  headers={['Symbol', 'Trades', 'Win Rate', 'Total PnL']}
+                  rows={behavior.topAssets.map(a => [
+                    a.symbol,
+                    `${a.count}`,
+                    `${a.winRate.toFixed(1)}%`,
+                    formatUSD(a.totalPnl),
+                  ])}
+                />
+                <BehaviorTable
+                  title="📉 Worst Performing Assets"
+                  headers={['Symbol', 'Trades', 'Win Rate', 'Total PnL']}
+                  rows={behavior.worstAssets.map(a => [
+                    a.symbol,
+                    `${a.count}`,
+                    `${a.winRate.toFixed(1)}%`,
+                    formatUSD(a.totalPnl),
+                  ])}
+                />
+                <div className="lg:col-span-2">
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-3">💡 Asset Selection Insight</h3>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      {behavior.worstAssets.length > 0 && behavior.worstAssets[0].totalPnl < -100
+                        ? `${behavior.worstAssets[0].symbol} is your biggest drag (${formatUSD(behavior.worstAssets[0].totalPnl)} across ${behavior.worstAssets[0].count} trades). Consider removing it from your watchlist or studying why it doesn't work for your strategy.`
+                        : `Asset diversification score: ${behavior.diversificationScore.toFixed(0)}%. `}
+                      {behavior.topAssets.length > 0 && ` Your best asset is ${behavior.topAssets[0].symbol} (${formatUSD(behavior.topAssets[0].totalPnl)} total). Consider increasing allocation to assets where you have a proven edge.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* RISK TAB */}
+            {activeTab === 'risk' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <BehaviorTable
+                  title="🛡️ Risk Management Profile"
+                  headers={['Metric', 'Value', 'Assessment']}
+                  rows={[
+                    ['Profit Factor', behavior.profitFactor === Infinity ? '∞' : behavior.profitFactor.toFixed(2), behavior.profitFactor > 1.5 ? '✅ Strong' : behavior.profitFactor > 1 ? '⚠️ Marginal' : '🔴 Losing edge'],
+                    ['Expectancy', formatUSD(behavior.expectancy), behavior.expectancy > 0 ? '✅ Positive' : '🔴 Negative'],
+                    ['Kelly %', `${behavior.kellyPct.toFixed(1)}%`, behavior.kellyPct > 20 ? '✅ Strong edge' : behavior.kellyPct > 0 ? '⚠️ Small edge' : '🔴 No edge'],
+                    ['Largest Win', formatUSD(behavior.largestWin), '—'],
+                    ['Largest Loss', formatUSD(Math.abs(behavior.largestLoss)), Math.abs(behavior.largestLoss) > behavior.largestWin ? '🔴 Larger than biggest win' : '✅ Controlled'],
+                    ['Max Consec. Wins', `${behavior.maxConsecutiveWins}`, '—'],
+                    ['Max Consec. Losses', `${behavior.maxConsecutiveLosses}`, behavior.maxConsecutiveLosses > 5 ? '🔴 Tilt risk' : '✅ Normal'],
+                    ['Win/Loss Ratio', `${(behavior.largestWin / Math.max(1, Math.abs(behavior.largestLoss))).toFixed(2)}x`, '—'],
+                  ]}
+                />
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-3">
+                    <StatCard label="Largest Win" value={formatUSD(behavior.largestWin)} positive={true} />
+                    <StatCard label="Largest Loss" value={formatUSD(Math.abs(behavior.largestLoss))} positive={false} />
+                    <StatCard label="Max Win Streak" value={`${behavior.maxConsecutiveWins}`} positive={true} />
+                    <StatCard label="Max Loss Streak" value={`${behavior.maxConsecutiveLosses}`} positive={behavior.maxConsecutiveLosses <= 5} />
+                  </div>
+                  <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-white mb-3">💡 Risk Insight</h3>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      {behavior.profitFactor < 1
+                        ? `Your profit factor is below 1 (${behavior.profitFactor.toFixed(2)}), meaning you're losing money over time. Focus on either improving win rate or increasing average winner size relative to losers.`
+                        : behavior.maxConsecutiveLosses > 5
+                        ? `You've had a streak of ${behavior.maxConsecutiveLosses} consecutive losses. Consider implementing a "circuit breaker" — stop trading after 3-4 consecutive losses and review your setups before continuing.`
+                        : Math.abs(behavior.largestLoss) > behavior.largestWin
+                        ? `Your largest loss (${formatUSD(Math.abs(behavior.largestLoss))}) exceeds your largest win (${formatUSD(behavior.largestWin)}). This asymmetry suggests you need tighter risk management on individual trades.`
+                        : `Risk profile looks solid. Profit factor of ${behavior.profitFactor.toFixed(2)} with Kelly suggesting ${behavior.kellyPct.toFixed(1)}% position sizing. Stay disciplined.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Trade Table */}
-        {filtered.length > 0 && (
-          <div className="card" style={{ overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: 'left' }}>Symbol</th>
-                    <th style={{ textAlign: 'center' }}>Dir</th>
-                    <th style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => handleSort('entryTime')}>Entry Date<SortIcon field="entryTime" /></th>
-                    <th style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => handleSort('exitTime')}>Exit Date<SortIcon field="exitTime" /></th>
-                    <th style={{ textAlign: 'center' }}>Result</th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('pnl')}>P&L<SortIcon field="pnl" /></th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('pnlPercent')}>P&L %<SortIcon field="pnlPercent" /></th>
-                    <th style={{ textAlign: 'right' }}>Entry</th>
-                    <th style={{ textAlign: 'right' }}>Exit</th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('holdingTime')}>Held<SortIcon field="holdingTime" /></th>
-                    <th style={{ textAlign: 'center' }}>Chart</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((g, i) => (
-                    <tr key={i} onClick={() => setSelectedGroup(g)} style={{ cursor: 'pointer' }}>
-                      <td>
-                        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: '0.82rem', color: '#f0f2f5' }}>{g.symbol}</span>
-                        <div style={{ fontSize: '0.58rem', color: '#545b66' }}>{g.entries.length} in · {g.exits.length} out</div>
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span style={{ fontSize: '0.65rem', fontWeight: 600, color: g.direction === 'long' ? '#00c878' : '#ff4d4d', textTransform: 'uppercase' }}>
-                          {g.direction === 'long' ? '↑ Long' : '↓ Short'}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'left', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.68rem', color: '#c9cdd3', whiteSpace: 'nowrap' }}>
-                        {g.entries[0] ? new Date(g.entries[0].timestamp).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}
-                        <div style={{ fontSize: '0.58rem', color: '#545b66' }}>
-                          {g.entries[0] ? new Date(g.entries[0].timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''}
-                        </div>
-                      </td>
-                      <td style={{ textAlign: 'left', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.68rem', color: '#c9cdd3', whiteSpace: 'nowrap' }}>
-                        {g.exits[0] ? new Date(g.exits[g.exits.length - 1].timestamp).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}
-                        <div style={{ fontSize: '0.58rem', color: '#545b66' }}>
-                          {g.exits[0] ? new Date(g.exits[g.exits.length - 1].timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''}
-                        </div>
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span style={{
-                          display: 'inline-block', padding: '0.18rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', fontWeight: 700,
-                          background: g.pnl > 0 ? 'rgba(0,200,120,0.12)' : 'rgba(255,77,77,0.12)',
-                          color: g.pnl > 0 ? '#00c878' : '#ff4d4d',
-                        }}>
-                          {g.pnl > 0 ? '✅ WIN' : '❌ LOSS'}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', fontWeight: 600, color: g.pnl >= 0 ? '#00c878' : '#ff4d4d' }}>
-                        {g.pnl >= 0 ? '+' : ''}${g.pnl.toFixed(2)}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <span style={{
-                          display: 'inline-block', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', fontWeight: 600,
-                          padding: '0.15rem 0.4rem', borderRadius: 4,
-                          background: g.pnlPercent >= 0 ? 'rgba(0,200,120,0.1)' : 'rgba(255,77,77,0.1)',
-                          color: g.pnlPercent >= 0 ? '#00c878' : '#ff4d4d',
-                        }}>
-                          {g.pnlPercent >= 0 ? '+' : ''}{g.pnlPercent.toFixed(2)}%
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#c9cdd3' }}>
-                        {fmtPrice(g.entryAvg)}
-                      </td>
-                      <td style={{ textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: '#c9cdd3' }}>
-                        {fmtPrice(g.exitAvg)}
-                      </td>
-                      <td style={{ textAlign: 'right', fontSize: '0.72rem', color: '#8b9099' }}>
-                        {formatDuration(g.holdingTime)}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span style={{ fontSize: '0.7rem', color: '#4f8cff' }}>📊</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Per-symbol breakdown */}
-        {stats?.symbolStats && stats.symbolStats.length > 1 && (
-          <div className="card" style={{ marginTop: '1rem', padding: '0.75rem 1rem' }}>
-            <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#f0f2f5', marginBottom: '0.5rem' }}>📊 By Symbol</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-              {stats.symbolStats.map((s: any) => (
-                <div key={s.symbol} style={{
-                  padding: '0.4rem 0.65rem', borderRadius: 6, fontSize: '0.68rem',
-                  background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
-                  display: 'flex', gap: '0.5rem', alignItems: 'center',
-                }}>
-                  <b style={{ color: '#f0f2f5' }}>{s.symbol}</b>
-                  <span style={{ color: '#8b9099' }}>{s.trades} trades</span>
-                  <span style={{ color: s.pnl >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>${s.pnl.toFixed(2)}</span>
-                  <span style={{ color: '#8b9099' }}>{s.winRate}% WR</span>
+        {/* TRADE LIST + CHART */}
+        <div className="mt-8">
+          <h2 className="text-lg font-semibold mb-4">Individual Trades</h2>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Trade List */}
+            <div className="lg:col-span-1 bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
+              {trades.map((t, i) => (
+                <div
+                  key={t.id}
+                  onClick={() => selectTrade(t)}
+                  className={`px-4 py-3 border-b border-[#1e2133] cursor-pointer transition-all hover:bg-[#1e2133] ${selectedTrade?.id === t.id ? 'bg-[#1e2133] border-l-2 border-l-blue-400' : ''}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${t.side === 'LONG' ? 'bg-emerald-400/20 text-emerald-400' : 'bg-red-400/20 text-red-400'}`}>
+                        {t.side}
+                      </span>
+                      <span className="text-sm font-medium">{t.symbol}</span>
+                    </div>
+                    <span className={`text-sm font-mono ${t.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {t.pnl >= 0 ? '+' : ''}{formatUSD(t.pnl)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-xs text-gray-500">{t.entryTime ? new Date(t.entryTime).toLocaleDateString() : `Trade #${i + 1}`}</span>
+                    <span className={`text-xs font-mono ${t.pnlPercent >= 0 ? 'text-emerald-400/70' : 'text-red-400/70'}`}>
+                      {t.pnlPercent >= 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
-          </div>
-        )}
-      </div>
 
-      {/* Chart Modal */}
-      {selectedGroup && <TradeChart group={selectedGroup} onClose={() => setSelectedGroup(null)} />}
+            {/* Chart */}
+            <div className="lg:col-span-2">
+              {selectedTrade ? (
+                <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <span className={`text-xs font-bold px-2 py-1 rounded mr-2 ${selectedTrade.side === 'LONG' ? 'bg-emerald-400/20 text-emerald-400' : 'bg-red-400/20 text-red-400'}`}>
+                        {selectedTrade.side}
+                      </span>
+                      <span className="text-lg font-bold">{selectedTrade.symbol}</span>
+                    </div>
+                    <div className={`text-lg font-mono font-bold ${selectedTrade.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {selectedTrade.pnl >= 0 ? '+' : ''}{formatUSD(selectedTrade.pnl)} ({selectedTrade.pnlPercent >= 0 ? '+' : ''}{selectedTrade.pnlPercent.toFixed(2)}%)
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-4 gap-3 mb-4 text-xs">
+                    <div><span className="text-gray-500">Entry</span><div className="font-mono text-gray-300">${selectedTrade.entryPrice.toFixed(4)}</div></div>
+                    <div><span className="text-gray-500">Exit</span><div className="font-mono text-gray-300">${selectedTrade.exitPrice.toFixed(4)}</div></div>
+                    <div><span className="text-gray-500">Size</span><div className="font-mono text-gray-300">{selectedTrade.quantity}</div></div>
+                    <div><span className="text-gray-500">Duration</span><div className="font-mono text-gray-300">{formatHours(getHoldingHours(selectedTrade))}</div></div>
+                  </div>
+                  {candles.length > 0 ? (
+                    <TradeChart trade={selectedTrade} candles={candles} />
+                  ) : (
+                    <div className="h-[300px] bg-[#12141f] rounded-lg flex items-center justify-center text-gray-500 text-sm">
+                      Loading chart...
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg h-[500px] flex items-center justify-center text-gray-500">
+                  Select a trade to view the chart
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+      </div>
     </div>
   );
 }
