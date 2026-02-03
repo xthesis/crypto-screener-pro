@@ -11,6 +11,41 @@ const INTERVAL_MAP: Record<string, { binance: string; bybit: string; hl: string;
 };
 
 // ═══════════════════════════════════════════════
+// SYMBOL CLEANING
+// ═══════════════════════════════════════════════
+// Hyperliquid CSV exports symbols in various formats:
+//   Spot:  VAPOR/USDC, HYPE/USDC, PURR/USDC
+//   Perps: HYPE, BTC, ETH, SOL
+//   Weird: COPPER (xyz), NATGAS (xyz), kPEPE, kBONK, kNEIRO
+//
+// Binance/Bybit need: HYPE (we append USDT in the fetch functions)
+// Hyperliquid perps need: HYPE
+// Hyperliquid spot needs: HYPE (just the base, NOT HYPE/USDC)
+
+function cleanSymbol(raw: string): string {
+  let s = raw.toUpperCase().trim();
+  // Strip /USDC or /USDT suffix (spot pairs)
+  s = s.replace(/\/USD[CT]$/i, '');
+  // Strip parentheticals like " (xyz)"
+  s = s.replace(/\s*\(.*\)$/, '');
+  // Strip k-prefix: kPEPE -> PEPE, kBONK -> BONK, kNEIRO -> NEIRO
+  s = s.replace(/^K(?=[A-Z]{3,})/, '');
+  return s;
+}
+
+// Hyperliquid spot uses @N suffix format for spot tokens
+// We try the base symbol first (works for perps), then @1, @2 etc for spot
+function getHyperliquidSymbols(raw: string): string[] {
+  const clean = cleanSymbol(raw);
+  const isSpot = raw.toUpperCase().includes('/USDC') || raw.toUpperCase().includes('/USDT');
+  if (isSpot) {
+    // For known spot tokens, try with @N suffixes first, then bare
+    return [`@1`, `@2`, `@3`, clean].map(s => s.startsWith('@') ? `${clean}${s}` : s);
+  }
+  return [clean];
+}
+
+// ═══════════════════════════════════════════════
 // BINANCE
 // ═══════════════════════════════════════════════
 async function fetchBinanceCandles(symbol: string, startTime: number, endTime: number, interval: string): Promise<any[] | null> {
@@ -143,7 +178,8 @@ async function fetchHyperliquidCandles(symbol: string, startTime: number, endTim
 // ═══════════════════════════════════════════════
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const symbol = searchParams.get('symbol')?.toUpperCase() || '';
+  const rawSymbol = searchParams.get('symbol')?.toUpperCase() || '';
+  const symbol = cleanSymbol(rawSymbol);
   const start = parseInt(searchParams.get('start') || '0');
   const end = parseInt(searchParams.get('end') || '0');
   const interval = searchParams.get('interval') || '1h';
@@ -187,17 +223,22 @@ export async function GET(req: Request) {
     else { tried.push('bybit-perp'); }
   }
 
-  // 4. Hyperliquid
+  // 4. Hyperliquid — try multiple symbol formats for spot tokens
   if (!source) {
-    candles = await fetchHyperliquidCandles(symbol, paddedStart, paddedEnd, interval);
-    if (candles && candles.length > 0) { source = 'hyperliquid'; }
-    else { tried.push('hyperliquid'); }
+    const hlSymbols = getHyperliquidSymbols(rawSymbol);
+    for (const hlSym of hlSymbols) {
+      candles = await fetchHyperliquidCandles(hlSym, paddedStart, paddedEnd, interval);
+      if (candles && candles.length > 0) { source = `hyperliquid (${hlSym})`; break; }
+    }
+    if (!source) tried.push('hyperliquid');
   }
 
   if (!candles || candles.length === 0) {
     return NextResponse.json({
-      error: `No candle data for ${symbol}. Tried: ${tried.join(', ')}`,
+      error: `No candle data for ${symbol} (raw: ${rawSymbol}). Tried: ${tried.join(', ')}`,
       tried,
+      raw: rawSymbol,
+      cleaned: symbol,
       range: { paddedStart, paddedEnd },
     }, { status: 404 });
   }
