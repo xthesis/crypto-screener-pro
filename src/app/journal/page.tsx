@@ -53,6 +53,149 @@ function fmtPrice(v: number): string {
 }
 
 // ═══════════════════════════════════════════════
+// CLIENT-SIDE CANDLE FETCHING
+// Fetches directly from exchange APIs in the browser,
+// bypassing Railway IP blocks from Binance/Bybit/HL
+// ═══════════════════════════════════════════════
+
+const CANDLE_INTERVALS: Record<string, { binance: string; bybit: string; hl: string; ms: number }> = {
+  '15m': { binance: '15m', bybit: '15', hl: '15m', ms: 900000 },
+  '1h':  { binance: '1h',  bybit: '60', hl: '1h',  ms: 3600000 },
+  '4h':  { binance: '4h',  bybit: '240', hl: '4h', ms: 14400000 },
+  '1d':  { binance: '1d',  bybit: 'D',  hl: '1d',  ms: 86400000 },
+};
+
+function cleanCandleSymbol(raw: string): string {
+  let s = raw.toUpperCase().trim();
+  s = s.replace(/\/USD[CT]$/i, '');      // VAPOR/USDC -> VAPOR
+  s = s.replace(/\s*\(.*\)$/, '');       // COPPER (xyz) -> COPPER
+  s = s.replace(/^K(?=[A-Z]{3,})/, '');  // kPEPE -> PEPE
+  return s;
+}
+
+async function fetchBinanceDirect(sym: string, startMs: number, endMs: number, ivl: string): Promise<Candle[] | null> {
+  try {
+    const binanceIvl = CANDLE_INTERVALS[ivl]?.binance || '1h';
+    const all: Candle[] = [];
+    let cursor = startMs;
+    let attempts = 0;
+    while (cursor < endMs && attempts < 10) {
+      attempts++;
+      const url = `https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=${binanceIvl}&startTime=${cursor}&endTime=${endMs}&limit=1000`;
+      const res = await fetch(url);
+      if (!res.ok) break;
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) break;
+      for (const k of data) {
+        all.push({ time: Math.floor(k[0] / 1000), open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) });
+      }
+      const lastTs = data[data.length - 1][0];
+      if (lastTs <= cursor) break;
+      cursor = lastTs + 1;
+      if (data.length < 1000) break;
+    }
+    return all.length > 0 ? all : null;
+  } catch { return null; }
+}
+
+async function fetchBybitDirect(sym: string, startMs: number, endMs: number, ivl: string, category: string): Promise<Candle[] | null> {
+  try {
+    const bybitIvl = CANDLE_INTERVALS[ivl]?.bybit || '60';
+    const all: Candle[] = [];
+    let curEnd = endMs;
+    let attempts = 0;
+    while (curEnd > startMs && attempts < 10) {
+      attempts++;
+      const url = `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${sym}USDT&interval=${bybitIvl}&start=${startMs}&end=${curEnd}&limit=1000`;
+      const res = await fetch(url);
+      if (!res.ok) break;
+      const data = await res.json();
+      const list = data?.result?.list;
+      if (!list || list.length === 0) break;
+      const oldestTs = parseInt(list[list.length - 1][0]);
+      for (let i = list.length - 1; i >= 0; i--) {
+        const k = list[i];
+        all.push({ time: Math.floor(parseInt(k[0]) / 1000), open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) });
+      }
+      if (oldestTs >= curEnd) break;
+      curEnd = oldestTs - 1;
+      if (list.length < 1000) break;
+    }
+    return all.length > 0 ? all : null;
+  } catch { return null; }
+}
+
+async function fetchHyperliquidDirect(sym: string, startMs: number, endMs: number, ivl: string): Promise<Candle[] | null> {
+  try {
+    const hlIvl = CANDLE_INTERVALS[ivl]?.hl || '1h';
+    const ivlMs = CANDLE_INTERVALS[ivl]?.ms || 3600000;
+    const all: Candle[] = [];
+    let cursor = startMs;
+    const chunkSize = 500 * ivlMs;
+    let attempts = 0;
+    while (cursor < endMs && attempts < 10) {
+      attempts++;
+      const chunkEnd = Math.min(cursor + chunkSize, endMs);
+      const res = await fetch('https://api.hyperliquid.xyz/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'candleSnapshot', req: { coin: sym, interval: hlIvl, startTime: cursor, endTime: chunkEnd } }),
+      });
+      if (!res.ok) break;
+      const data = await res.json();
+      if (!data || !Array.isArray(data) || data.length === 0) { cursor = chunkEnd; continue; }
+      for (const k of data) {
+        all.push({ time: Math.floor(k.t / 1000), open: parseFloat(k.o), high: parseFloat(k.h), low: parseFloat(k.l), close: parseFloat(k.c), volume: parseFloat(k.v) });
+      }
+      cursor = chunkEnd;
+    }
+    return all.length > 0 ? all : null;
+  } catch { return null; }
+}
+
+async function fetchCandlesClientSide(rawSymbol: string, start: number, end: number, ivl: string, ctxMs: number): Promise<{ candles: Candle[]; source: string }> {
+  const sym = cleanCandleSymbol(rawSymbol);
+  const ivlMs = CANDLE_INTERVALS[ivl]?.ms || 3600000;
+  const beforePad = ctxMs > 0 ? ctxMs : ivlMs * 200;
+  const afterPad = ivlMs * 30;
+  const paddedStart = start - beforePad;
+  const paddedEnd = end + afterPad;
+
+  let data: Candle[] | null = null;
+  let source = '';
+
+  // 1. Binance
+  data = await fetchBinanceDirect(sym, paddedStart, paddedEnd, ivl);
+  if (data) source = 'Binance';
+
+  // 2. Bybit spot
+  if (!data) { data = await fetchBybitDirect(sym, paddedStart, paddedEnd, ivl, 'spot'); if (data) source = 'Bybit'; }
+
+  // 3. Bybit perps
+  if (!data) { data = await fetchBybitDirect(sym, paddedStart, paddedEnd, ivl, 'linear'); if (data) source = 'Bybit'; }
+
+  // 4. Hyperliquid perps
+  if (!data) { data = await fetchHyperliquidDirect(sym, paddedStart, paddedEnd, ivl); if (data) source = 'Hyperliquid'; }
+
+  // 5. Hyperliquid spot (@N suffixes)
+  if (!data && rawSymbol.includes('/')) {
+    for (const suffix of ['@1', '@2', '@3']) {
+      data = await fetchHyperliquidDirect(sym + suffix, paddedStart, paddedEnd, ivl);
+      if (data) { source = `HL spot (${sym}${suffix})`; break; }
+    }
+  }
+
+  if (!data || data.length === 0) {
+    throw new Error(`No candle data for ${sym}. Tried Binance, Bybit, Hyperliquid.`);
+  }
+
+  // Deduplicate and sort
+  const seen = new Set<number>();
+  const unique = data.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; }).sort((a, b) => a.time - b.time);
+  return { candles: unique, source };
+}
+
+// ═══════════════════════════════════════════════
 // CHART MODAL
 // ═══════════════════════════════════════════════
 
@@ -81,7 +224,7 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
   const [contextMs, setContextMs] = useState(2592000000); // default 1 month
   const [candleCount, setCandleCount] = useState(0);
 
-  // Fetch candles whenever interval or context changes
+  // Fetch candles client-side (directly from exchanges)
   useEffect(() => {
     let cancelled = false;
     const fetchData = async () => {
@@ -92,12 +235,10 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
       const end = Math.max(...allTimes);
 
       try {
-        const res = await fetch(`/api/candles?symbol=${group.symbol}&start=${start}&end=${end}&interval=${interval}&context=${contextMs}`);
-        const data = await res.json();
+        const result = await fetchCandlesClientSide(group.symbol, start, end, interval, contextMs);
         if (cancelled) return;
-        if (data.error) throw new Error(data.error);
-        setCandles(data.candles || []);
-        setCandleCount(data.count || 0);
+        setCandles(result.candles);
+        setCandleCount(result.candles.length);
       } catch (e: any) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -175,7 +316,7 @@ function TradeChart({ group, onClose }: { group: TradeGroup; onClose: () => void
         });
       }
       markers.sort((a, b) => a.time - b.time);
-      series.setMarkers(markers);
+      if (markers.length > 0) series.setMarkers(markers);
 
       // Price lines for avg entry/exit
       series.createPriceLine({
