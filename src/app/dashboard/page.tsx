@@ -13,16 +13,39 @@ interface Coin {
   price_change_percentage_24h: number;
 }
 
+interface AISummaryData {
+  summary: string;
+  stats: {
+    totalCoins: number;
+    gainers: number;
+    losers: number;
+    bigGainers: number;
+    bigLosers: number;
+    avgChange: string;
+    aboveMA20: number;
+    aboveMA50: number;
+    aboveMA200: number;
+    goldenCross: number;
+    deathCross: number;
+    maCoinsCount: number;
+    btcPrice: number;
+    btcChange: number;
+    ethPrice: number;
+    ethChange: number;
+    solPrice: number;
+    solChange: number;
+  };
+  generatedAt: string;
+}
+
 const SAVED_FORMULAS = [
   { id: '1', name: 'Top Gainers', description: '24h change > 5%', filter: (c: Coin) => c.price_change_percentage_24h > 5 },
   { id: '2', name: 'Top Losers', description: '24h change < -5%', filter: (c: Coin) => c.price_change_percentage_24h < -5 },
   { id: '3', name: 'High Volume', description: 'Volume > $1M', filter: (c: Coin) => c.total_volume > 1000000 },
 ];
 
-// All exchanges enabled by default
 const ALL_EXCHANGES: ExchangeName[] = ['binance', 'bybit', 'okx', 'gateio', 'hyperliquid'];
 
-// Convert SimpleTicker to Coin format
 function tickerToCoin(ticker: SimpleTicker): Coin {
   return {
     id: `${ticker.exchange}-${ticker.symbol}`,
@@ -34,19 +57,74 @@ function tickerToCoin(ticker: SimpleTicker): Coin {
   };
 }
 
+function fmtPrice(v: number) {
+  if (v >= 1000) return '$' + v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (v >= 1) return '$' + v.toFixed(2);
+  return '$' + v.toFixed(4);
+}
+
+// Parse the AI summary into sections
+function parseSummary(text: string): { title: string; content: string }[] {
+  const sections: { title: string; content: string }[] = [];
+  // Match **TITLE** pattern or numbered headers
+  const lines = text.split('\n');
+  let currentTitle = '';
+  let currentContent: string[] = [];
+
+  for (const line of lines) {
+    const headerMatch = line.match(/^\d*\.?\s*\*\*(.+?)\*\*\s*[-–:]?\s*(.*)/);
+    if (headerMatch) {
+      if (currentTitle) {
+        sections.push({ title: currentTitle, content: currentContent.join(' ').trim() });
+      }
+      currentTitle = headerMatch[1].trim();
+      currentContent = headerMatch[2] ? [headerMatch[2].trim()] : [];
+    } else if (line.trim()) {
+      currentContent.push(line.trim());
+    }
+  }
+  if (currentTitle) {
+    sections.push({ title: currentTitle, content: currentContent.join(' ').trim() });
+  }
+
+  // If parsing failed, return as single block
+  if (sections.length === 0 && text.trim()) {
+    sections.push({ title: 'Market Summary', content: text.trim() });
+  }
+
+  return sections;
+}
+
+function getSentimentIcon(title: string) {
+  const t = title.toUpperCase();
+  if (t.includes('PULSE') || t.includes('SENTIMENT')) return '🎯';
+  if (t.includes('MOVE') || t.includes('KEY')) return '📊';
+  if (t.includes('MA') || t.includes('AVERAGE') || t.includes('STRUCTURE')) return '📈';
+  if (t.includes('SIGNAL') || t.includes('NOTABLE') || t.includes('WATCH')) return '🔍';
+  if (t.includes('RISK')) return '⚠️';
+  return '📋';
+}
+
+function getRiskColor(content: string) {
+  const lower = content.toLowerCase();
+  if (lower.includes('high')) return '#ff4d4d';
+  if (lower.includes('low')) return '#00c878';
+  return '#f5a623';
+}
+
 export default function Dashboard() {
   const [coins, setCoins] = useState<Coin[]>([]);
   const [loading, setLoading] = useState(true);
   const [formulaResults, setFormulaResults] = useState<Record<string, Coin[]>>({});
   const [runningFormula, setRunningFormula] = useState<string | null>(null);
+  const [aiSummary, setAiSummary] = useState<AISummaryData | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const fetchCoins = useCallback(async () => {
     try {
       const tickers = await fetchAllExchanges(ALL_EXCHANGES);
-      
-      // Aggregate by base symbol
       const aggregated = new Map<string, Coin>();
-      
       tickers.forEach(ticker => {
         const existing = aggregated.get(ticker.base);
         if (existing) {
@@ -57,7 +135,6 @@ export default function Dashboard() {
           aggregated.set(ticker.base, tickerToCoin(ticker));
         }
       });
-      
       setCoins(Array.from(aggregated.values()));
       setLoading(false);
     } catch (error) {
@@ -66,11 +143,30 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchAISummary = useCallback(async () => {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch('/api/ai-summary');
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to fetch AI summary');
+      }
+      const data = await res.json();
+      setAiSummary(data);
+    } catch (e: any) {
+      setAiError(e.message);
+    } finally {
+      setAiLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchCoins();
+    fetchAISummary();
     const interval = setInterval(fetchCoins, 30000);
     return () => clearInterval(interval);
-  }, [fetchCoins]);
+  }, [fetchCoins, fetchAISummary]);
 
   const topGainers = [...coins].sort((a, b) => b.price_change_percentage_24h - a.price_change_percentage_24h).slice(0, 10);
   const topLosers = [...coins].sort((a, b) => a.price_change_percentage_24h - b.price_change_percentage_24h).slice(0, 10);
@@ -82,11 +178,8 @@ export default function Dashboard() {
     try {
       const results = coins.filter(f.filter);
       setFormulaResults(prev => ({ ...prev, [f.id]: results }));
-    } catch (e) { 
-      console.error(e); 
-    } finally { 
-      setRunningFormula(null); 
-    }
+    } catch (e) { console.error(e); }
+    finally { setRunningFormula(null); }
   };
 
   const Skel = ({ h = 20 }: { h?: number }) => (
@@ -112,12 +205,18 @@ export default function Dashboard() {
         <div style={{ fontSize: '0.65rem', color: '#545b66' }}>${c.current_price.toLocaleString(undefined, { maximumFractionDigits: 6 })}</div>
       </div>
       <span style={{ color: '#4f8cff', fontWeight: 600, fontSize: '0.75rem' }}>
-        ${c.total_volume >= 1000000000 ? (c.total_volume / 1000000000).toFixed(2) + 'B' : 
-          c.total_volume >= 1000000 ? (c.total_volume / 1000000).toFixed(2) + 'M' : 
+        ${c.total_volume >= 1000000000 ? (c.total_volume / 1000000000).toFixed(2) + 'B' :
+          c.total_volume >= 1000000 ? (c.total_volume / 1000000).toFixed(2) + 'M' :
           (c.total_volume / 1000).toFixed(0) + 'K'}
       </span>
     </div>
   );
+
+  const summaryTime = aiSummary?.generatedAt
+    ? new Date(aiSummary.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
+
+  const sections = aiSummary ? parseSummary(aiSummary.summary) : [];
 
   return (
     <div style={{ minHeight: '100vh' }}>
@@ -140,6 +239,166 @@ export default function Dashboard() {
           <p style={{ fontSize: '0.75rem', color: '#545b66' }}>{loading ? 'Fetching from all exchanges…' : `${coins.length} coins tracked · auto-refreshes every 30s`}</p>
         </div>
 
+        {/* ═══════════════ AI MARKET SUMMARY ═══════════════ */}
+        <div style={{
+          marginBottom: '1.75rem',
+          background: 'linear-gradient(135deg, rgba(79,140,255,0.06) 0%, rgba(168,85,247,0.06) 100%)',
+          border: '1px solid rgba(79,140,255,0.15)',
+          borderRadius: 12,
+          overflow: 'hidden',
+        }}>
+          {/* Header bar */}
+          <div style={{
+            padding: '0.85rem 1.25rem',
+            borderBottom: '1px solid rgba(79,140,255,0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            background: 'rgba(79,140,255,0.03)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '1rem' }}>🤖</span>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f0f2f5', letterSpacing: '-0.01em' }}>AI Market Summary</span>
+              <span style={{
+                fontSize: '0.55rem',
+                fontWeight: 600,
+                padding: '0.15rem 0.4rem',
+                borderRadius: 4,
+                background: 'rgba(79,140,255,0.15)',
+                color: '#4f8cff',
+                letterSpacing: '0.04em',
+              }}>POWERED BY CLAUDE</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              {summaryTime && (
+                <span style={{ fontSize: '0.625rem', color: '#545b66' }}>Generated {summaryTime}</span>
+              )}
+              <button
+                onClick={fetchAISummary}
+                disabled={aiLoading}
+                style={{
+                  background: 'rgba(79,140,255,0.1)',
+                  border: '1px solid rgba(79,140,255,0.2)',
+                  borderRadius: 6,
+                  color: '#4f8cff',
+                  fontSize: '0.65rem',
+                  fontWeight: 600,
+                  padding: '0.3rem 0.6rem',
+                  cursor: aiLoading ? 'wait' : 'pointer',
+                  opacity: aiLoading ? 0.5 : 1,
+                  transition: 'all 0.15s',
+                }}
+              >
+                {aiLoading ? '⟳ Analyzing...' : '↻ Refresh'}
+              </button>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div style={{ padding: '1.25rem' }}>
+            {aiLoading && !aiSummary && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem 1rem', gap: '0.75rem' }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: '50%',
+                  border: '2px solid rgba(79,140,255,0.2)',
+                  borderTopColor: '#4f8cff',
+                  animation: 'spin 1s linear infinite',
+                }}></div>
+                <span style={{ fontSize: '0.75rem', color: '#8b9099' }}>AI is analyzing {'>'}1400 coins across 5 exchanges...</span>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+              </div>
+            )}
+
+            {aiError && (
+              <div style={{
+                padding: '1rem',
+                background: 'rgba(255,77,77,0.06)',
+                border: '1px solid rgba(255,77,77,0.15)',
+                borderRadius: 8,
+              }}>
+                <span style={{ fontSize: '0.75rem', color: '#ff4d4d' }}>⚠ {aiError}</span>
+                <p style={{ fontSize: '0.65rem', color: '#545b66', marginTop: '0.25rem' }}>Make sure ANTHROPIC_API_KEY is set in Railway environment variables.</p>
+              </div>
+            )}
+
+            {aiSummary && (
+              <>
+                {/* Quick stats bar */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))',
+                  gap: '0.5rem',
+                  marginBottom: '1.25rem',
+                }}>
+                  {[
+                    { label: 'BTC', value: fmtPrice(aiSummary.stats.btcPrice), change: aiSummary.stats.btcChange },
+                    { label: 'ETH', value: fmtPrice(aiSummary.stats.ethPrice), change: aiSummary.stats.ethChange },
+                    { label: 'SOL', value: fmtPrice(aiSummary.stats.solPrice), change: aiSummary.stats.solChange },
+                    { label: 'Above 20MA', value: `${((aiSummary.stats.aboveMA20 / aiSummary.stats.maCoinsCount) * 100).toFixed(0)}%`, change: null },
+                    { label: 'Golden Cross', value: String(aiSummary.stats.goldenCross), change: null },
+                    { label: 'Death Cross', value: String(aiSummary.stats.deathCross), change: null },
+                  ].map(s => (
+                    <div key={s.label} style={{
+                      padding: '0.6rem',
+                      borderRadius: 8,
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      textAlign: 'center',
+                    }}>
+                      <div style={{ fontSize: '0.55rem', color: '#545b66', marginBottom: '0.2rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f0f2f5', fontFamily: 'JetBrains Mono, monospace' }}>{s.value}</div>
+                      {s.change !== null && (
+                        <div style={{
+                          fontSize: '0.65rem', fontWeight: 600, marginTop: '0.1rem',
+                          color: s.change >= 0 ? '#00c878' : '#ff4d4d',
+                        }}>
+                          {s.change >= 0 ? '+' : ''}{s.change.toFixed(2)}%
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* AI Analysis sections */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  {sections.map((section, idx) => {
+                    const isRisk = section.title.toUpperCase().includes('RISK');
+                    return (
+                      <div key={idx} style={{
+                        padding: '0.85rem 1rem',
+                        borderRadius: 8,
+                        background: isRisk
+                          ? `rgba(${getRiskColor(section.content) === '#ff4d4d' ? '255,77,77' : getRiskColor(section.content) === '#00c878' ? '0,200,120' : '245,158,35'},0.04)`
+                          : 'rgba(255,255,255,0.02)',
+                        border: `1px solid ${isRisk
+                          ? `rgba(${getRiskColor(section.content) === '#ff4d4d' ? '255,77,77' : getRiskColor(section.content) === '#00c878' ? '0,200,120' : '245,158,35'},0.15)`
+                          : 'rgba(255,255,255,0.04)'}`,
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.35rem' }}>
+                          <span style={{ fontSize: '0.75rem' }}>{getSentimentIcon(section.title)}</span>
+                          <span style={{
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            color: isRisk ? getRiskColor(section.content) : '#8b9099',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.06em',
+                          }}>{section.title}</span>
+                        </div>
+                        <p style={{
+                          fontSize: '0.78rem',
+                          color: '#c8ccd2',
+                          lineHeight: 1.55,
+                          margin: 0,
+                        }}>{section.content}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
         {/* Stats row */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
           {[
@@ -155,7 +414,7 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* 4 panels - 2x2 grid */}
+        {/* 4 panels */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem', marginBottom: '1.75rem' }}>
           {/* Top Gainers */}
           <div className="card" style={{ padding: '1.25rem' }}>
