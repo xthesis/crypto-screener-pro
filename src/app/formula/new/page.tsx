@@ -2,9 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { fetchAllExchanges, ExchangeName } from '@/lib/exchanges/client-fetcher';
 
 const SUPABASE_URL = 'https://mzuocbdocvhpffytsvaw.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im16dW9jYmRvY3ZocGZmeXRzdmF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwNTc0OTYsImV4cCI6MjA4NTYzMzQ5Nn0.boaEi1_VmDW6NWC998NwJpEvAY899pLIlFTbr0dHgIc';
+
+const ALL_EXCHANGES: ExchangeName[] = ['binance', 'bybit', 'okx', 'gateio', 'hyperliquid'];
 
 interface Condition {
   id: number;
@@ -222,9 +225,12 @@ export default function FormulaBuilder() {
   const runScreen = async () => {
     setLoading(true); setError(null); setResults(null);
     try {
-      // Fetch all coins from Supabase
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/coins?select=base,exchange,price,volume_24h,change_24h,ma_20,ma_50,ma_200`,
+      // Fetch LIVE prices from all exchanges
+      const tickers = await fetchAllExchanges(ALL_EXCHANGES);
+
+      // Fetch MA data from Supabase
+      const maRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/coins?select=base,ma_20,ma_50,ma_200`,
         {
           headers: {
             'apikey': SUPABASE_KEY,
@@ -232,9 +238,36 @@ export default function FormulaBuilder() {
           }
         }
       );
-      if (!res.ok) throw new Error('Failed to fetch coin data');
-      const allCoins: CoinResult[] = await res.json();
-      
+      const maData: { base: string; ma_20: number | null; ma_50: number | null; ma_200: number | null }[] = maRes.ok ? await maRes.json() : [];
+
+      // Build MA lookup (use first match per base)
+      const maMap = new Map<string, { ma_20: number | null; ma_50: number | null; ma_200: number | null }>();
+      for (const m of maData) {
+        if (!maMap.has(m.base)) maMap.set(m.base, { ma_20: m.ma_20, ma_50: m.ma_50, ma_200: m.ma_200 });
+      }
+
+      // Aggregate tickers by base (keep best volume per exchange, deduplicate)
+      const coinMap = new Map<string, CoinResult>();
+      for (const t of tickers) {
+        const key = `${t.base}-${t.exchange}`;
+        const ma = maMap.get(t.base);
+        const coin: CoinResult = {
+          base: t.base,
+          exchange: t.exchange,
+          price: t.price,
+          volume_24h: t.volume24h,
+          change_24h: t.priceChangePercent24h,
+          ma_20: ma?.ma_20 ?? null,
+          ma_50: ma?.ma_50 ?? null,
+          ma_200: ma?.ma_200 ?? null,
+        };
+        const existing = coinMap.get(key);
+        if (!existing || coin.volume_24h > existing.volume_24h) {
+          coinMap.set(key, coin);
+        }
+      }
+      const allCoins = Array.from(coinMap.values());
+
       // Filter using conditions
       const matched = allCoins.filter(coin => evaluateCoin(coin, conditions));
       setResults(matched);
@@ -280,7 +313,7 @@ export default function FormulaBuilder() {
       <div className="page-shell" style={{ maxWidth: 920 }}>
         <div style={{ marginBottom: '1.75rem' }}>
           <h1 style={{ fontSize: '1.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>Formula Builder</h1>
-          <p style={{ fontSize: '0.6875rem', color: '#545b66' }}>Build custom screens with MA indicators across {'>'}1400 coins</p>
+          <p style={{ fontSize: '0.6875rem', color: '#545b66' }}>Build custom screens with live prices + MA indicators across all exchanges</p>
         </div>
 
         {/* Templates */}
@@ -375,7 +408,7 @@ export default function FormulaBuilder() {
           className="btn btn-primary"
           style={{ width: '100%', padding: '0.75rem', fontSize: '0.8125rem', opacity: (loading || hasEmpty) ? 0.4 : 1, marginBottom: '1.25rem' }}
         >
-          {loading ? 'Screening…' : hasEmpty ? 'Fill in all values' : '▶ Run Screen Against 1400+ Coins'}
+          {loading ? 'Screening…' : hasEmpty ? 'Fill in all values' : '▶ Run Screen (Live Prices + MAs)'}
         </button>
 
         {error && (
@@ -391,7 +424,7 @@ export default function FormulaBuilder() {
               <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>
                 {sortedResults.length > 0 ? <><span style={{ color: '#4f8cff' }}>{sortedResults.length}</span> coins matched</> : 'No coins matched'}
               </span>
-              <span style={{ fontSize: '0.6625rem', color: '#545b66' }}>Supabase · 1D MAs</span>
+              <span style={{ fontSize: '0.6625rem', color: '#545b66' }}>Live prices · 1D MAs</span>
             </div>
             {sortedResults.length === 0 ? (
               <p style={{ textAlign: 'center', color: '#545b66', padding: '2.5rem 1rem', fontSize: '0.78rem' }}>No coins match. Try loosening your conditions.</p>
