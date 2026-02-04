@@ -87,8 +87,11 @@ export async function POST(req: Request) {
     if (ANTHROPIC_KEY) {
       const statsText = buildStatsPrompt(stats, groups);
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 25000); // 25s timeout
         const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': ANTHROPIC_KEY,
@@ -143,18 +146,33 @@ Rules:
             }],
           }),
         });
+        clearTimeout(timeout);
         if (aiRes.ok) {
           const aiData = await aiRes.json();
           const rawText = aiData.content?.[0]?.text || '';
-          // Try to parse as JSON, fallback to raw text
-          try {
-            const cleaned = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-            coachData = JSON.parse(cleaned);
-          } catch {
-            analysis = rawText; // fallback to text display
+          if (rawText) {
+            // Try to parse as JSON, fallback to raw text
+            try {
+              // Strip markdown fences, leading/trailing text outside braces
+              let cleaned = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+              // Find the first { and last } to extract just the JSON object
+              const firstBrace = cleaned.indexOf('{');
+              const lastBrace = cleaned.lastIndexOf('}');
+              if (firstBrace !== -1 && lastBrace > firstBrace) {
+                cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+              }
+              coachData = JSON.parse(cleaned);
+            } catch (parseErr) {
+              console.error('Coach JSON parse failed:', parseErr, 'Raw:', rawText.substring(0, 200));
+              analysis = rawText; // fallback to text display
+            }
           }
+        } else {
+          console.error('AI coach API error:', aiRes.status, aiRes.statusText);
         }
-      } catch {}
+      } catch (aiErr) {
+        console.error('AI coach fetch error:', aiErr);
+      }
     }
 
     return NextResponse.json({ stats, groups, analysis, coachData });
