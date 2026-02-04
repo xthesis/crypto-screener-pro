@@ -16,10 +16,10 @@ const INTERVAL_MAP: Record<string, { binance: string; bybit: string; hl: string;
 // HYPERLIQUID SYMBOL SOP:
 //   PERPS:  "BTC", "HYPE"         → candle coin = bare name
 //   SPOT:   "BTC/USDC"            → candle coin = "@142" (resolved from spotMeta)
-//   WEIRD:  "COPPER (xyz)"        → strip parens → "COPPER"
+//   HIP-3:  "COPPER (xyz)"        → candle coin = "xyz:COPPER"
 //           "kPEPE"               → strip k-prefix → "PEPE"
 //
-//   The /USDC suffix is THE signal for HL spot. Without it, treat as perp.
+//   /USDC suffix → spot. Parenthetical "(dex)" → HIP-3. Neither → perp.
 //   Spot resolver uses pair.name (NOT array index) + U-stripped aliases.
 //   See journal/page.tsx for full documentation.
 
@@ -33,6 +33,12 @@ function getBaseName(raw: string): string {
 
 function isHlSpotSymbol(raw: string): boolean {
   return /\/USD[CT]$/i.test(raw.trim());
+}
+
+/** Extract HIP-3 dex: "COPPER (xyz)" → "xyz". Null if not HIP-3. */
+function extractHip3Dex(raw: string): string | null {
+  const m = raw.trim().match(/\((\w+)\)\s*$/);
+  return m ? m[1].toLowerCase() : null;
 }
 
 // Hyperliquid spot: resolve token name → candle coin identifier via spotMetaAndAssetCtxs
@@ -224,6 +230,7 @@ export async function GET(req: Request) {
   const rawSymbol = searchParams.get('symbol') || '';
   const base = getBaseName(rawSymbol);
   const hlSpot = isHlSpotSymbol(rawSymbol);
+  const hip3Dex = extractHip3Dex(rawSymbol);
   const start = parseInt(searchParams.get('start') || '0');
   const end = parseInt(searchParams.get('end') || '0');
   const interval = searchParams.get('interval') || '1h';
@@ -247,7 +254,13 @@ export async function GET(req: Request) {
   let source = '';
   const tried: string[] = [];
 
-  if (hlSpot) {
+  if (hip3Dex) {
+    // ── HIP-3 PATH: "COPPER (xyz)" → candle coin "xyz:COPPER" ──
+    const hip3Coin = `${hip3Dex}:${base}`;
+    candles = await fetchHyperliquidCandles(hip3Coin, paddedStart, paddedEnd, interval);
+    if (candles?.length) source = `hip3-${hip3Dex} (${hip3Coin})`;
+    if (!source) tried.push(`hip3-${hip3Dex}`);
+  } else if (hlSpot) {
     // ── HL SPOT PATH ──
     const spotIndex = await resolveHlSpotIndex(base);
     if (spotIndex) {

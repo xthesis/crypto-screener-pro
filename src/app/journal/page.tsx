@@ -58,35 +58,25 @@ function fmtPrice(v: number): string {
 //
 // HYPERLIQUID SYMBOL SOP:
 // ──────────────────────────────────────────────
-// The Hyperliquid CSV exports two distinct symbol formats:
+// The Hyperliquid CSV exports three distinct symbol formats:
 //
 //   PERPS:  "BTC", "ETH", "HYPE"              (bare name)
 //   SPOT:   "BTC/USDC", "SCHIZO/USDC"         (name/quote pair)
+//   HIP-3:  "COPPER (xyz)", "NATGAS (xyz)"    (asset + deployer dex in parens)
 //
-// The /USDC or /USDT suffix is the ONLY signal for spot vs perp.
+// DETECTION:
+//   /USDC or /USDT suffix → spot path
+//   Parenthetical "(dex)"  → HIP-3 path (candle coin = "dex:ASSET")
+//   Neither               → standard perp path
 //
-// SPOT RESOLVER (systematic, handles current + future tokens):
-// ──────────────────────────────────────────────
-// The candle API needs a 'coin' identifier for spot pairs (e.g. "@142" for BTC spot).
-// This comes from pair.name in the spotMetaAndAssetCtxs API response.
-//
-// ⚠️  pair.name ≠ array index for ~73% of pairs. Always use pair.name.
-//
-// The resolver builds a lookup cache with TWO passes:
-//   Pass 1: Index by API token name → UBTC→@142, HYPE→@107, SCHIZO→@23
-//   Pass 2: Add U-stripped aliases   → BTC→@142, ETH→@151, SOL→@156
-//           (only if stripped name isn't already taken by a native token)
-//
-// This handles the HL UI convention where Unit Protocol tokens (UBTC, UETH, USOL)
-// are displayed without the "U" prefix (BTC/USDC, ETH/USDC, SOL/USDC).
-// Native tokens always take priority over aliases in collision cases.
-// No hardcoded lists. No fullName parsing. Works for any future token.
+// SPOT RESOLVER:
+//   pair.name from spotMetaAndAssetCtxs (NOT array index — they diverge 73%).
+//   Two-pass cache: direct API names + U-stripped aliases for Unit tokens.
 //
 // ROUTING:
-//   1. If symbol has /USDC or /USDT → spot path:
-//        Resolve via HL spot cache → fallback Binance → Bybit
-//   2. Otherwise → perp path:
-//        Binance → Bybit → HL perp → HL spot (last resort)
+//   1. HIP-3 → HL direct with "dex:ASSET" coin (works for any deployer)
+//   2. Spot  → HL spot cache → Binance → Bybit
+//   3. Perp  → Binance → Bybit → HL perp → HL spot (last resort)
 // ──────────────────────────────────────────────
 
 const CANDLE_INTERVALS: Record<string, { binance: string; bybit: string; hl: string; ms: number }> = {
@@ -108,6 +98,18 @@ function getBaseName(raw: string): string {
 /** Detect if a raw symbol is a Hyperliquid spot token (contains /USDC or /USDT) */
 function isHlSpotSymbol(raw: string): boolean {
   return /\/USD[CT]$/i.test(raw.trim());
+}
+
+/**
+ * Extract HIP-3 dex name from parenthetical: "COPPER (xyz)" → "xyz"
+ * Returns null if not a HIP-3 symbol.
+ * HIP-3 perps use "{dex}:{ASSET}" as candle coin, e.g. "xyz:COPPER".
+ * The CSV exports them as "ASSET (dex)", e.g. "COPPER (xyz)".
+ * This works for ANY deployer — no hardcoded dex list.
+ */
+function extractHip3Dex(raw: string): string | null {
+  const m = raw.trim().match(/\((\w+)\)\s*$/);
+  return m ? m[1].toLowerCase() : null;
 }
 
 // ═══════════════════════════════════════════════
@@ -284,6 +286,7 @@ async function fetchHyperliquidDirect(coin: string, startMs: number, endMs: numb
 async function fetchCandlesClientSide(rawSymbol: string, start: number, end: number, ivl: string, ctxMs: number): Promise<{ candles: Candle[]; source: string }> {
   const base = getBaseName(rawSymbol);
   const hlSpot = isHlSpotSymbol(rawSymbol);
+  const hip3Dex = extractHip3Dex(rawSymbol);
   const ivlMs = CANDLE_INTERVALS[ivl]?.ms || 3600000;
   const beforePad = ctxMs > 0 ? ctxMs : ivlMs * 200;
   const afterPad = ivlMs * 30;
@@ -294,7 +297,13 @@ async function fetchCandlesClientSide(rawSymbol: string, start: number, end: num
   let source = '';
   const tried: string[] = [];
 
-  if (hlSpot) {
+  if (hip3Dex) {
+    // ── HIP-3 PATH: "COPPER (xyz)" → candle coin "xyz:COPPER" ──
+    const hip3Coin = `${hip3Dex}:${base}`;
+    data = await fetchHyperliquidDirect(hip3Coin, paddedStart, paddedEnd, ivl);
+    if (data) source = `HIP-3 ${hip3Dex} (${hip3Coin})`;
+    if (!data) tried.push(`hip3-${hip3Dex}`);
+  } else if (hlSpot) {
     // ── HL SPOT PATH: resolve @index first, then fall back to CEXes ──
     const spotIndex = await getHlSpotIndex(base);
     if (spotIndex) {
