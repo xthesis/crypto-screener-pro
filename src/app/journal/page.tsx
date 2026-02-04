@@ -429,6 +429,7 @@ export default function TradeJournal() {
   const [groups, setGroups] = useState<TradeGroup[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [analysis, setAnalysis] = useState('');
+  const [coachData, setCoachData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<TradeGroup | null>(null);
@@ -454,6 +455,7 @@ export default function TradeJournal() {
       setGroups(data.groups || []);
       setStats(data.stats || null);
       setAnalysis(data.analysis || '');
+      setCoachData(data.coachData || null);
       setHasData(true);
     } catch (e: any) {
       setError(e.message);
@@ -528,8 +530,40 @@ export default function TradeJournal() {
   );
 
   const reset = () => {
-    setGroups([]); setStats(null); setAnalysis(''); setHasData(false); setError('');
+    setGroups([]); setStats(null); setAnalysis(''); setCoachData(null); setHasData(false); setError('');
     setFilterSymbol('all'); setFilterResult('all');
+  };
+
+  // Coach visual helpers
+  const gradeColor = (g: string) => {
+    if (!g) return '#8b9099';
+    const letter = g.charAt(0).toUpperCase();
+    if (letter === 'A') return '#00c878';
+    if (letter === 'B') return '#4f8cff';
+    if (letter === 'C') return '#f5a623';
+    if (letter === 'D') return '#ff8c42';
+    return '#ff4d4d';
+  };
+
+  const gradePercent = (g: string) => {
+    if (!g) return 0;
+    const map: Record<string, number> = { 'A+': 98, 'A': 93, 'A-': 90, 'B+': 87, 'B': 83, 'B-': 80, 'C+': 77, 'C': 73, 'C-': 70, 'D+': 67, 'D': 63, 'D-': 60, 'F': 30 };
+    return map[g.toUpperCase()] || 50;
+  };
+
+  const scoreColor = (v: number) => {
+    if (v >= 75) return '#00c878';
+    if (v >= 50) return '#f5a623';
+    if (v >= 30) return '#ff8c42';
+    return '#ff4d4d';
+  };
+
+  const coachIcon = (icon: string) => {
+    const icons: Record<string, string> = {
+      trophy: '🏆', target: '🎯', shield: '🛡️', trending: '📈', zap: '⚡',
+      alert: '🚨', clock: '⏱️', skull: '💀', flame: '🔥', ban: '🚫',
+    };
+    return icons[icon] || '•';
   };
 
   return (
@@ -668,14 +702,134 @@ export default function TradeJournal() {
           </div>
         )}
 
-        {/* AI Analysis */}
-        {analysis && (
-          <div className="card" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '1rem' }}>🤖</span>
-              <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#f0f2f5' }}>AI Trading Coach</span>
-            </div>
-            <div style={{ fontSize: '0.76rem', color: '#c9cdd3', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{analysis}</div>
+        {/* AI Coach Visual Dashboard */}
+        {(coachData || analysis) && (
+          <div style={{ marginBottom: '1.25rem' }}>
+            {coachData ? (
+              <>
+                {/* Grade + Scores Row */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                  {/* Grade Circle */}
+                  <div className="card" style={{ padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: 120 }}>
+                    <div style={{ fontSize: '0.58rem', color: '#8b9099', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>AI Coach Grade</div>
+                    <div style={{
+                      width: 72, height: 72, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: `conic-gradient(${gradeColor(coachData.grade)} ${gradePercent(coachData.grade)}%, rgba(255,255,255,0.06) 0%)`,
+                      position: 'relative',
+                    }}>
+                      <div style={{
+                        width: 58, height: 58, borderRadius: '50%', background: '#1a1d23', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexDirection: 'column',
+                      }}>
+                        <span style={{ fontSize: '1.4rem', fontWeight: 800, color: gradeColor(coachData.grade), lineHeight: 1 }}>{coachData.grade}</span>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.62rem', color: '#c9cdd3', marginTop: '0.4rem', textAlign: 'center', maxWidth: 110 }}>{coachData.gradeLabel}</div>
+                  </div>
+
+                  {/* Score Bars */}
+                  <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '0.55rem' }}>
+                    {coachData.scores && Object.entries(coachData.scores).map(([key, score]: [string, any]) => (
+                      <div key={key}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.2rem' }}>
+                          <span style={{ fontSize: '0.65rem', color: '#c9cdd3', fontWeight: 600, textTransform: 'capitalize' }}>{key.replace(/([A-Z])/g, ' $1')}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ fontSize: '0.58rem', color: '#8b9099' }}>{score.label}</span>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 700, color: scoreColor(score.value), fontFamily: 'JetBrains Mono, monospace' }}>{score.value}</span>
+                          </div>
+                        </div>
+                        <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                          <div style={{
+                            height: '100%', borderRadius: 3, width: `${score.value}%`,
+                            background: `linear-gradient(90deg, ${scoreColor(score.value)}88, ${scoreColor(score.value)})`,
+                            transition: 'width 0.8s ease',
+                          }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Strengths + Mistakes Row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                  {/* Strengths */}
+                  <div className="card" style={{ padding: '0.75rem 1rem' }}>
+                    <div style={{ fontSize: '0.62rem', color: '#00c878', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>✦ Strengths</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {coachData.strengths?.map((s: any, i: number) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.35rem 0.5rem', borderRadius: 6, background: 'rgba(0,200,120,0.04)', border: '1px solid rgba(0,200,120,0.08)' }}>
+                          <span style={{ fontSize: '0.8rem', flexShrink: 0 }}>{coachIcon(s.icon)}</span>
+                          <div>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#f0f2f5' }}>{s.title}</div>
+                            <div style={{ fontSize: '0.6rem', color: '#8b9099' }}>{s.detail}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Mistakes */}
+                  <div className="card" style={{ padding: '0.75rem 1rem' }}>
+                    <div style={{ fontSize: '0.62rem', color: '#ff4d4d', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>⚑ Mistakes</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {coachData.mistakes?.map((m: any, i: number) => (
+                        <div key={i} style={{
+                          display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.35rem 0.5rem', borderRadius: 6,
+                          background: m.severity === 'high' ? 'rgba(255,77,77,0.06)' : 'rgba(255,165,0,0.04)',
+                          border: `1px solid ${m.severity === 'high' ? 'rgba(255,77,77,0.12)' : 'rgba(255,165,0,0.08)'}`,
+                        }}>
+                          <span style={{ fontSize: '0.8rem', flexShrink: 0 }}>{coachIcon(m.icon)}</span>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                              <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#f0f2f5' }}>{m.title}</span>
+                              {m.severity === 'high' && <span style={{ fontSize: '0.5rem', padding: '0.08rem 0.3rem', borderRadius: 3, background: 'rgba(255,77,77,0.15)', color: '#ff4d4d', fontWeight: 700 }}>HIGH</span>}
+                            </div>
+                            <div style={{ fontSize: '0.6rem', color: '#8b9099' }}>{m.detail}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Plan + Pattern */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  {/* Action Plan */}
+                  <div className="card" style={{ padding: '0.75rem 1rem' }}>
+                    <div style={{ fontSize: '0.62rem', color: '#4f8cff', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>◆ Action Plan</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      {coachData.actions?.map((a: string, i: number) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
+                          <span style={{
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            width: 18, height: 18, borderRadius: '50%', background: 'rgba(79,140,255,0.12)', flexShrink: 0,
+                            fontSize: '0.55rem', fontWeight: 800, color: '#4f8cff',
+                          }}>{i + 1}</span>
+                          <span style={{ fontSize: '0.66rem', color: '#c9cdd3', lineHeight: 1.4 }}>{a}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Pattern */}
+                  <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ fontSize: '0.62rem', color: '#f5a623', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>◉ Key Pattern</div>
+                    <div style={{ fontSize: '0.72rem', color: '#e8eaed', lineHeight: 1.55, flex: 1, display: 'flex', alignItems: 'center' }}>
+                      {coachData.pattern}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : analysis ? (
+              /* Fallback: raw text display */
+              <div className="card" style={{ padding: '1rem 1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  <span style={{ fontSize: '1rem' }}>🤖</span>
+                  <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#f0f2f5' }}>AI Trading Coach</span>
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#c9cdd3', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{analysis}</div>
+              </div>
+            ) : null}
           </div>
         )}
 

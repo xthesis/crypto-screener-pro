@@ -82,6 +82,7 @@ export async function POST(req: Request) {
     };
 
     let analysis = '';
+    let coachData: any = null;
     const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
     if (ANTHROPIC_KEY) {
       const statsText = buildStatsPrompt(stats, groups);
@@ -95,32 +96,68 @@ export async function POST(req: Request) {
           },
           body: JSON.stringify({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 800,
+            max_tokens: 1200,
             messages: [{
               role: 'user',
-              content: `You are a professional crypto trading coach. Analyze this trader's performance and give specific, actionable feedback. Be direct and honest.
+              content: `You are a professional crypto trading coach. Analyze this trader's performance data and return ONLY valid JSON — no markdown, no backticks, no explanation.
 
 ${statsText}
 
-Give your analysis in these sections (use these exact headers):
-🎯 Overall Assessment (1-2 sentences, grade A-F)
-📊 Key Strengths (2-3 bullets)
-⚠️ Critical Mistakes (2-3 specific issues with concrete examples from their trades)
-📈 Improvement Plan (3 concrete action items)
-💡 Pattern Noticed (any recurring behavior, good or bad)
+Return this exact JSON structure:
+{
+  "grade": "B+",
+  "gradeLabel": "Solid but needs discipline",
+  "scores": {
+    "discipline": { "value": 45, "label": "Overtrading" },
+    "riskManagement": { "value": 72, "label": "Good R:R ratio" },
+    "execution": { "value": 58, "label": "Entries OK, exits poor" },
+    "consistency": { "value": 35, "label": "Erratic sizing" }
+  },
+  "strengths": [
+    { "icon": "trophy", "title": "Good R:R", "detail": "1.42 avg win/loss ratio" },
+    { "icon": "target", "title": "Alt selection", "detail": "KAITO +$1,693 profit" }
+  ],
+  "mistakes": [
+    { "icon": "alert", "title": "Overtrading", "detail": "762 trades, $13,959 in fees (72% of gross)", "severity": "high" },
+    { "icon": "clock", "title": "No patience", "detail": "CAKE held 50s, BNB trades <10min", "severity": "medium" }
+  ],
+  "actions": [
+    "Max 20 trades/month — only A+ setups",
+    "24h minimum hold rule for all positions",
+    "Focus on KAITO, VIRTUAL, PENGU — drop BTC scalps"
+  ],
+  "pattern": "Skilled at finding alts but addicted to action. Best P&L from longer holds on small caps, worst from scalping majors."
+}
 
-Keep it under 400 words. No disclaimers. Reference their actual trades and numbers.`
+Rules:
+- grade: A+ to F, be honest
+- scores: 0-100 each. Be harsh if warranted.
+- label: max 4 words describing the score
+- strengths: exactly 2-3 items, icon must be one of: trophy, target, shield, trending, zap
+- mistakes: exactly 2-3 items, icon must be one of: alert, clock, skull, flame, ban. severity: high/medium/low
+- actions: exactly 3 items, max 10 words each, very specific
+- pattern: max 25 words, the single most important behavioral insight
+- detail fields: max 10 words, use actual numbers from their data
+- All values must reference actual numbers and coins from the data above
+- Return ONLY the JSON object, nothing else`
             }],
           }),
         });
         if (aiRes.ok) {
           const aiData = await aiRes.json();
-          analysis = aiData.content?.[0]?.text || '';
+          const rawText = aiData.content?.[0]?.text || '';
+          // Try to parse as JSON, fallback to raw text
+          try {
+            const cleaned = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+            coachData = JSON.parse(cleaned);
+          } catch {
+            analysis = rawText; // fallback to text display
+          }
         }
       } catch {}
     }
 
-    return NextResponse.json({ stats, groups, analysis });
+    return NextResponse.json({ stats, groups, analysis, coachData });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
