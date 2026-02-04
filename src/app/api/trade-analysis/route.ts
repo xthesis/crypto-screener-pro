@@ -135,9 +135,11 @@ type ExchangeFormat = 'hyperliquid' | 'binance-spot' | 'binance-futures' | 'bybi
 function detectExchange(headers: string[]): ExchangeFormat {
   const h = headers.join('|');
 
-  // Hyperliquid: time coin direction price size trade volume fee closedpnl
+  // Hyperliquid: old format: time coin direction price size trade volume fee closedpnl
+  //              new format: time coin dir px sz ntl fee closedpnl
   if (h.includes('closedpnl') && h.includes('coin')) return 'hyperliquid';
   if (h.includes('trade volume') && h.includes('coin')) return 'hyperliquid';
+  if (h.includes('coin') && (h.includes('|dir|') || h.includes('|dir') || h === 'dir' || h.includes('|px|') || h.includes('|ntl|'))) return 'hyperliquid';
 
   // Binance Spot: Date(UTC),Pair,Side,Price,Executed,Amount,Fee
   if (h.includes('date(utc)') && (h.includes('pair') || h.includes('market'))) return 'binance-spot';
@@ -193,12 +195,12 @@ function mapColumns(fmt: ExchangeFormat, hdr: string[]): ColMap {
     case 'hyperliquid':
       m.time = fc(hdr, 'time', 'date');
       m.symbol = fc(hdr, 'coin', 'symbol');
-      m.side = fc(hdr, 'direction', 'side');
-      m.price = fc(hdr, 'price');
-      m.size = fc(hdr, 'size', 'quantity', 'qty');
+      m.side = fc(hdr, 'direction', 'dir', 'side');
+      m.price = fc(hdr, 'price', 'px');
+      m.size = fc(hdr, 'size', 'sz', 'quantity', 'qty');
       m.fee = fc(hdr, 'fee');
       m.pnl = fc(hdr, 'closedpnl', 'closed pnl');
-      m.vol = fc(hdr, 'trade volume', 'volume');
+      m.vol = fc(hdr, 'trade volume', 'ntl', 'volume');
       break;
     case 'binance-spot':
       m.time = fc(hdr, 'date(utc)', 'date', 'time');
@@ -264,12 +266,12 @@ function mapColumns(fmt: ExchangeFormat, hdr: string[]): ColMap {
     default: // generic
       m.time = fc(hdr, 'time', 'date', 'timestamp', 'created', 'datetime', 'order time', 'trade time', 'execution time');
       m.symbol = fc(hdr, 'coin', 'symbol', 'pair', 'market', 'asset', 'instrument', 'instid', 'contracts', 'trading pair', 'instrument id', 'ticker');
-      m.side = fc(hdr, 'direction', 'side', 'type', 'order type', 'closing direction', 'action');
-      m.price = fc(hdr, 'price', 'avg filled price', 'avg. filled price', 'exec price', 'filled price', 'fill price', 'fillpx', 'deal price', 'execution price', 'trade price');
-      m.size = fc(hdr, 'size', 'quantity', 'qty', 'amount', 'filled', 'executed', 'filled qty', 'fillsz', 'contracts');
+      m.side = fc(hdr, 'direction', 'dir', 'side', 'type', 'order type', 'closing direction', 'action');
+      m.price = fc(hdr, 'price', 'px', 'avg filled price', 'avg. filled price', 'exec price', 'filled price', 'fill price', 'fillpx', 'deal price', 'execution price', 'trade price');
+      m.size = fc(hdr, 'size', 'sz', 'quantity', 'qty', 'amount', 'filled', 'executed', 'filled qty', 'fillsz', 'contracts');
       m.fee = fc(hdr, 'fee', 'commission', 'trading fee');
       m.pnl = fc(hdr, 'closedpnl', 'closed pnl', 'closed p&l', 'realized profit', 'realised pnl', 'realised profit', 'realized pnl', 'pnl', 'profit');
-      m.vol = fc(hdr, 'trade volume', 'volume', 'total', 'filled value', 'quote quantity', 'exec value', 'notional');
+      m.vol = fc(hdr, 'trade volume', 'ntl', 'volume', 'total', 'filled value', 'quote quantity', 'exec value', 'notional');
       m.entryPrice = fc(hdr, 'entry price');
       m.exitPrice = fc(hdr, 'exit price');
       m.closingDir = fc(hdr, 'closing direction');
