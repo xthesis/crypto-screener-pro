@@ -13,36 +13,79 @@ const INTERVAL_MAP: Record<string, { binance: string; bybit: string; hl: string;
 // ═══════════════════════════════════════════════
 // SYMBOL CLEANING
 // ═══════════════════════════════════════════════
-// Hyperliquid CSV exports symbols in various formats:
-//   Spot:  VAPOR/USDC, HYPE/USDC, PURR/USDC
-//   Perps: HYPE, BTC, ETH, SOL
-//   Weird: COPPER (xyz), NATGAS (xyz), kPEPE, kBONK, kNEIRO
+// HYPERLIQUID SYMBOL SOP:
+//   PERPS:  "BTC", "HYPE"         → candle coin = bare name
+//   SPOT:   "BTC/USDC"            → candle coin = "@142" (resolved from spotMeta)
+//   WEIRD:  "COPPER (xyz)"        → strip parens → "COPPER"
+//           "kPEPE"               → strip k-prefix → "PEPE"
 //
-// Binance/Bybit need: HYPE (we append USDT in the fetch functions)
-// Hyperliquid perps need: HYPE
-// Hyperliquid spot needs: HYPE (just the base, NOT HYPE/USDC)
+//   The /USDC suffix is THE signal for HL spot. Without it, treat as perp.
+//   Spot resolver uses pair.name (NOT array index) + U-stripped aliases.
+//   See journal/page.tsx for full documentation.
 
-function cleanSymbol(raw: string): string {
+function getBaseName(raw: string): string {
   let s = raw.toUpperCase().trim();
-  // Strip /USDC or /USDT suffix (spot pairs)
   s = s.replace(/\/USD[CT]$/i, '');
-  // Strip parentheticals like " (xyz)"
   s = s.replace(/\s*\(.*\)$/, '');
-  // Strip k-prefix: kPEPE -> PEPE, kBONK -> BONK, kNEIRO -> NEIRO
   s = s.replace(/^K(?=[A-Z]{3,})/, '');
   return s;
 }
 
-// Hyperliquid spot uses @N suffix format for spot tokens
-// We try the base symbol first (works for perps), then @1, @2 etc for spot
-function getHyperliquidSymbols(raw: string): string[] {
-  const clean = cleanSymbol(raw);
-  const isSpot = raw.toUpperCase().includes('/USDC') || raw.toUpperCase().includes('/USDT');
-  if (isSpot) {
-    // For known spot tokens, try with @N suffixes first, then bare
-    return [`@1`, `@2`, `@3`, clean].map(s => s.startsWith('@') ? `${clean}${s}` : s);
+function isHlSpotSymbol(raw: string): boolean {
+  return /\/USD[CT]$/i.test(raw.trim());
+}
+
+// Hyperliquid spot: resolve token name → candle coin identifier via spotMetaAndAssetCtxs
+// Uses pair.name (e.g. "@107", "PURR/USDC") — NOT the array index!
+
+let _hlSpotCache: Record<string, string> | null = null;
+
+async function resolveHlSpotIndex(tokenName: string): Promise<string | null> {
+  if (!_hlSpotCache) {
+    try {
+      const res = await fetch('https://api.hyperliquid.xyz/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'spotMetaAndAssetCtxs' }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const meta = Array.isArray(data) ? data[0] : data;
+      const tokens: { index: number; name: string }[] = meta?.tokens || [];
+      const universe: { tokens: number[]; name: string; index: number }[] = meta?.universe || [];
+
+      const tokenMap: Record<number, string> = {};
+      for (const t of tokens) tokenMap[t.index] = t.name.toUpperCase();
+
+      // SYSTEMATIC RESOLVER: see journal/page.tsx for full documentation.
+      // Step 1: index by API token name, using pair.name (NOT array index).
+      // Step 2: add U-stripped aliases (UBTC→BTC) where no collision exists.
+      _hlSpotCache = {};
+
+      for (const pair of universe) {
+        const toks = pair.tokens || [];
+        const apiName = tokenMap[toks[0]];
+        const coin = pair.name;
+        if (apiName && coin && !_hlSpotCache[apiName]) {
+          _hlSpotCache[apiName] = coin;
+        }
+      }
+
+      for (const pair of universe) {
+        const toks = pair.tokens || [];
+        const apiName = tokenMap[toks[0]];
+        const coin = pair.name;
+        if (!apiName || !coin) continue;
+        if (apiName.startsWith('U') && apiName.length > 2) {
+          const stripped = apiName.substring(1);
+          if (!_hlSpotCache[stripped]) {
+            _hlSpotCache[stripped] = coin;
+          }
+        }
+      }
+    } catch { _hlSpotCache = {}; }
   }
-  return [clean];
+  return _hlSpotCache[tokenName.toUpperCase()] || null;
 }
 
 // ═══════════════════════════════════════════════
@@ -174,18 +217,19 @@ async function fetchHyperliquidCandles(symbol: string, startTime: number, endTim
 }
 
 // ═══════════════════════════════════════════════
-// ROUTE
+// ROUTE — follows the HL spot/perp SOP
 // ═══════════════════════════════════════════════
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const rawSymbol = searchParams.get('symbol')?.toUpperCase() || '';
-  const symbol = cleanSymbol(rawSymbol);
+  const rawSymbol = searchParams.get('symbol') || '';
+  const base = getBaseName(rawSymbol);
+  const hlSpot = isHlSpotSymbol(rawSymbol);
   const start = parseInt(searchParams.get('start') || '0');
   const end = parseInt(searchParams.get('end') || '0');
   const interval = searchParams.get('interval') || '1h';
   const context = parseInt(searchParams.get('context') || '0');
 
-  if (!symbol || !start || !end) {
+  if (!base || !start || !end) {
     return NextResponse.json({ error: 'Missing symbol, start, or end' }, { status: 400 });
   }
   if (!INTERVAL_MAP[interval]) {
@@ -193,10 +237,9 @@ export async function GET(req: Request) {
   }
 
   const ivlMs = INTERVAL_MAP[interval].ms;
-  const defaultContext = ivlMs * 200; // 200 candles of context before trade
+  const defaultContext = ivlMs * 200;
   const beforePad = context > 0 ? context : defaultContext;
   const afterPad = ivlMs * 30;
-
   const paddedStart = start - beforePad;
   const paddedEnd = end + afterPad;
 
@@ -204,41 +247,39 @@ export async function GET(req: Request) {
   let source = '';
   const tried: string[] = [];
 
-  // 1. Binance
-  candles = await fetchBinanceCandles(symbol, paddedStart, paddedEnd, interval);
-  if (candles && candles.length > 0) { source = 'binance'; }
-  else { tried.push('binance'); }
-
-  // 2. Bybit spot
-  if (!source) {
-    candles = await fetchBybitCandles(symbol, paddedStart, paddedEnd, interval, 'spot');
-    if (candles && candles.length > 0) { source = 'bybit-spot'; }
-    else { tried.push('bybit-spot'); }
-  }
-
-  // 3. Bybit perps
-  if (!source) {
-    candles = await fetchBybitCandles(symbol, paddedStart, paddedEnd, interval, 'linear');
-    if (candles && candles.length > 0) { source = 'bybit-perp'; }
-    else { tried.push('bybit-perp'); }
-  }
-
-  // 4. Hyperliquid — try multiple symbol formats for spot tokens
-  if (!source) {
-    const hlSymbols = getHyperliquidSymbols(rawSymbol);
-    for (const hlSym of hlSymbols) {
-      candles = await fetchHyperliquidCandles(hlSym, paddedStart, paddedEnd, interval);
-      if (candles && candles.length > 0) { source = `hyperliquid (${hlSym})`; break; }
+  if (hlSpot) {
+    // ── HL SPOT PATH ──
+    const spotIndex = await resolveHlSpotIndex(base);
+    if (spotIndex) {
+      candles = await fetchHyperliquidCandles(spotIndex, paddedStart, paddedEnd, interval);
+      if (candles && candles.length > 0) source = `hl-spot (${base}=${spotIndex})`;
     }
-    if (!source) tried.push('hyperliquid');
+    if (!source) tried.push('hl-spot');
+
+    // Fallback to CEXes
+    if (!source) { candles = await fetchBinanceCandles(base, paddedStart, paddedEnd, interval); if (candles?.length) source = 'binance'; else tried.push('binance'); }
+    if (!source) { candles = await fetchBybitCandles(base, paddedStart, paddedEnd, interval, 'spot'); if (candles?.length) source = 'bybit'; else tried.push('bybit'); }
+  } else {
+    // ── PERP / CEX PATH ──
+    candles = await fetchBinanceCandles(base, paddedStart, paddedEnd, interval);
+    if (candles?.length) source = 'binance'; else tried.push('binance');
+
+    if (!source) { candles = await fetchBybitCandles(base, paddedStart, paddedEnd, interval, 'spot'); if (candles?.length) source = 'bybit-spot'; else tried.push('bybit-spot'); }
+    if (!source) { candles = await fetchBybitCandles(base, paddedStart, paddedEnd, interval, 'linear'); if (candles?.length) source = 'bybit-perp'; else tried.push('bybit-perp'); }
+    if (!source) { candles = await fetchHyperliquidCandles(base, paddedStart, paddedEnd, interval); if (candles?.length) source = 'hl-perp'; else tried.push('hl-perp'); }
+
+    // Last resort: try as spot
+    if (!source) {
+      const spotIndex = await resolveHlSpotIndex(base);
+      if (spotIndex) { candles = await fetchHyperliquidCandles(spotIndex, paddedStart, paddedEnd, interval); if (candles?.length) source = `hl-spot (${base}=${spotIndex})`; }
+      if (!source) tried.push('hl-spot');
+    }
   }
 
   if (!candles || candles.length === 0) {
     return NextResponse.json({
-      error: `No candle data for ${symbol} (raw: ${rawSymbol}). Tried: ${tried.join(', ')}`,
-      tried,
-      raw: rawSymbol,
-      cleaned: symbol,
+      error: `No candle data for ${base} (raw: ${rawSymbol}). Tried: ${tried.join(', ')}`,
+      tried, raw: rawSymbol, base, hlSpot,
       range: { paddedStart, paddedEnd },
     }, { status: 404 });
   }
@@ -251,5 +292,5 @@ export async function GET(req: Request) {
     return true;
   }).sort((a: any, b: any) => a.time - b.time);
 
-  return NextResponse.json({ candles, symbol, interval, source, count: candles.length });
+  return NextResponse.json({ candles, symbol: base, interval, source, count: candles.length });
 }

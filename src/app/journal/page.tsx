@@ -54,9 +54,40 @@ function fmtPrice(v: number): string {
 
 // ═══════════════════════════════════════════════
 // CLIENT-SIDE CANDLE FETCHING
-// Fetches directly from exchange APIs in the browser,
-// bypassing Railway IP blocks from Binance/Bybit/HL
 // ═══════════════════════════════════════════════
+//
+// HYPERLIQUID SYMBOL SOP:
+// ──────────────────────────────────────────────
+// The Hyperliquid CSV exports two distinct symbol formats:
+//
+//   PERPS:  "BTC", "ETH", "HYPE"              (bare name)
+//   SPOT:   "BTC/USDC", "SCHIZO/USDC"         (name/quote pair)
+//
+// The /USDC or /USDT suffix is the ONLY signal for spot vs perp.
+//
+// SPOT RESOLVER (systematic, handles current + future tokens):
+// ──────────────────────────────────────────────
+// The candle API needs a 'coin' identifier for spot pairs (e.g. "@142" for BTC spot).
+// This comes from pair.name in the spotMetaAndAssetCtxs API response.
+//
+// ⚠️  pair.name ≠ array index for ~73% of pairs. Always use pair.name.
+//
+// The resolver builds a lookup cache with TWO passes:
+//   Pass 1: Index by API token name → UBTC→@142, HYPE→@107, SCHIZO→@23
+//   Pass 2: Add U-stripped aliases   → BTC→@142, ETH→@151, SOL→@156
+//           (only if stripped name isn't already taken by a native token)
+//
+// This handles the HL UI convention where Unit Protocol tokens (UBTC, UETH, USOL)
+// are displayed without the "U" prefix (BTC/USDC, ETH/USDC, SOL/USDC).
+// Native tokens always take priority over aliases in collision cases.
+// No hardcoded lists. No fullName parsing. Works for any future token.
+//
+// ROUTING:
+//   1. If symbol has /USDC or /USDT → spot path:
+//        Resolve via HL spot cache → fallback Binance → Bybit
+//   2. Otherwise → perp path:
+//        Binance → Bybit → HL perp → HL spot (last resort)
+// ──────────────────────────────────────────────
 
 const CANDLE_INTERVALS: Record<string, { binance: string; bybit: string; hl: string; ms: number }> = {
   '15m': { binance: '15m', bybit: '15', hl: '15m', ms: 900000 },
@@ -65,13 +96,108 @@ const CANDLE_INTERVALS: Record<string, { binance: string; bybit: string; hl: str
   '1d':  { binance: '1d',  bybit: 'D',  hl: '1d',  ms: 86400000 },
 };
 
-function cleanCandleSymbol(raw: string): string {
+/** Extract the base token name from any exchange symbol format */
+function getBaseName(raw: string): string {
   let s = raw.toUpperCase().trim();
-  s = s.replace(/\/USD[CT]$/i, '');      // VAPOR/USDC -> VAPOR
-  s = s.replace(/\s*\(.*\)$/, '');       // COPPER (xyz) -> COPPER
-  s = s.replace(/^K(?=[A-Z]{3,})/, '');  // kPEPE -> PEPE
+  s = s.replace(/\/USD[CT]$/i, '');      // VAPOR/USDC → VAPOR
+  s = s.replace(/\s*\(.*\)$/, '');       // COPPER (xyz) → COPPER
+  s = s.replace(/^K(?=[A-Z]{3,})/, '');  // kPEPE → PEPE
   return s;
 }
+
+/** Detect if a raw symbol is a Hyperliquid spot token (contains /USDC or /USDT) */
+function isHlSpotSymbol(raw: string): boolean {
+  return /\/USD[CT]$/i.test(raw.trim());
+}
+
+// ═══════════════════════════════════════════════
+// HYPERLIQUID SPOT INDEX RESOLVER
+// ═══════════════════════════════════════════════
+// Fetches spotMetaAndAssetCtxs once, builds name → @index cache.
+// e.g. SCHIZO → @23, HYPE → @105, PURR → @0
+
+let _hlSpotCache: Record<string, string> | null = null;
+let _hlSpotCachePromise: Promise<Record<string, string>> | null = null;
+
+async function getHlSpotIndex(tokenName: string): Promise<string | null> {
+  if (!_hlSpotCache) {
+    if (!_hlSpotCachePromise) {
+      _hlSpotCachePromise = (async () => {
+        try {
+          const res = await fetch('https://api.hyperliquid.xyz/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'spotMetaAndAssetCtxs' }),
+          });
+          if (!res.ok) return {};
+          const data = await res.json();
+          const meta = Array.isArray(data) ? data[0] : data;
+          const tokens: { index: number; name: string }[] = meta?.tokens || [];
+          const universe: { tokens: number[]; name: string; index: number }[] = meta?.universe || [];
+
+          // token ID → API name
+          const tokenMap: Record<number, string> = {};
+          for (const t of tokens) tokenMap[t.index] = t.name.toUpperCase();
+
+          // ═════════════════════════════════════════════════════════════
+          // SYSTEMATIC SPOT RESOLVER — handles current & future tokens
+          // ═════════════════════════════════════════════════════════════
+          //
+          // STEP 1: Index every spot pair by its API token name.
+          //   UBTC → @142, HYPE → @107, SCHIZO → @23, PURR → PURR/USDC
+          //   Uses pair.name (NOT array index — they diverge for 73% of pairs).
+          //   First USDC pair wins if a token appears in multiple quote pairs.
+          //
+          // STEP 2: For tokens starting with "U" (len > 2), add a stripped alias.
+          //   UBTC → alias BTC, UETH → alias ETH, USOL → alias SOL, etc.
+          //   This handles Unit Protocol tokens whose UI/CSV display name
+          //   drops the "U" prefix (HL shows "BTC/USDC" not "UBTC/USDC").
+          //   Alias is ONLY added if the stripped name isn't already taken,
+          //   so native tokens (e.g. native PUMP @20) always take priority
+          //   over Unit-wrapped versions (UPUMP @188).
+          //
+          // This is fully generic: no hardcoded lists, no fullName parsing.
+          // Works for any future token or naming convention.
+          // ═════════════════════════════════════════════════════════════
+
+          const nameToSpot: Record<string, string> = {};
+
+          // Step 1: direct API name index
+          for (const pair of universe) {
+            const toks = pair.tokens || [];
+            const apiName = tokenMap[toks[0]];
+            const coin = pair.name;
+            if (apiName && coin && !nameToSpot[apiName]) {
+              nameToSpot[apiName] = coin;
+            }
+          }
+
+          // Step 2: U-prefix stripped aliases
+          for (const pair of universe) {
+            const toks = pair.tokens || [];
+            const apiName = tokenMap[toks[0]];
+            const coin = pair.name;
+            if (!apiName || !coin) continue;
+            if (apiName.startsWith('U') && apiName.length > 2) {
+              const stripped = apiName.substring(1);
+              if (!nameToSpot[stripped]) {
+                nameToSpot[stripped] = coin;
+              }
+            }
+          }
+
+          return nameToSpot;
+        } catch { return {}; }
+      })();
+    }
+    _hlSpotCache = await _hlSpotCachePromise;
+  }
+  return _hlSpotCache[tokenName.toUpperCase()] || null;
+}
+
+// ═══════════════════════════════════════════════
+// EXCHANGE CANDLE FETCHERS
+// ═══════════════════════════════════════════════
 
 async function fetchBinanceDirect(sym: string, startMs: number, endMs: number, ivl: string): Promise<Candle[] | null> {
   try {
@@ -81,8 +207,7 @@ async function fetchBinanceDirect(sym: string, startMs: number, endMs: number, i
     let attempts = 0;
     while (cursor < endMs && attempts < 10) {
       attempts++;
-      const url = `https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=${binanceIvl}&startTime=${cursor}&endTime=${endMs}&limit=1000`;
-      const res = await fetch(url);
+      const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=${binanceIvl}&startTime=${cursor}&endTime=${endMs}&limit=1000`);
       if (!res.ok) break;
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) break;
@@ -106,8 +231,7 @@ async function fetchBybitDirect(sym: string, startMs: number, endMs: number, ivl
     let attempts = 0;
     while (curEnd > startMs && attempts < 10) {
       attempts++;
-      const url = `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${sym}USDT&interval=${bybitIvl}&start=${startMs}&end=${curEnd}&limit=1000`;
-      const res = await fetch(url);
+      const res = await fetch(`https://api.bybit.com/v5/market/kline?category=${category}&symbol=${sym}USDT&interval=${bybitIvl}&start=${startMs}&end=${curEnd}&limit=1000`);
       if (!res.ok) break;
       const data = await res.json();
       const list = data?.result?.list;
@@ -125,7 +249,7 @@ async function fetchBybitDirect(sym: string, startMs: number, endMs: number, ivl
   } catch { return null; }
 }
 
-async function fetchHyperliquidDirect(sym: string, startMs: number, endMs: number, ivl: string): Promise<Candle[] | null> {
+async function fetchHyperliquidDirect(coin: string, startMs: number, endMs: number, ivl: string): Promise<Candle[] | null> {
   try {
     const hlIvl = CANDLE_INTERVALS[ivl]?.hl || '1h';
     const ivlMs = CANDLE_INTERVALS[ivl]?.ms || 3600000;
@@ -139,7 +263,7 @@ async function fetchHyperliquidDirect(sym: string, startMs: number, endMs: numbe
       const res = await fetch('https://api.hyperliquid.xyz/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'candleSnapshot', req: { coin: sym, interval: hlIvl, startTime: cursor, endTime: chunkEnd } }),
+        body: JSON.stringify({ type: 'candleSnapshot', req: { coin, interval: hlIvl, startTime: cursor, endTime: chunkEnd } }),
       });
       if (!res.ok) break;
       const data = await res.json();
@@ -153,8 +277,13 @@ async function fetchHyperliquidDirect(sym: string, startMs: number, endMs: numbe
   } catch { return null; }
 }
 
+// ═══════════════════════════════════════════════
+// MAIN CANDLE RESOLVER — follows the SOP above
+// ═══════════════════════════════════════════════
+
 async function fetchCandlesClientSide(rawSymbol: string, start: number, end: number, ivl: string, ctxMs: number): Promise<{ candles: Candle[]; source: string }> {
-  const sym = cleanCandleSymbol(rawSymbol);
+  const base = getBaseName(rawSymbol);
+  const hlSpot = isHlSpotSymbol(rawSymbol);
   const ivlMs = CANDLE_INTERVALS[ivl]?.ms || 3600000;
   const beforePad = ctxMs > 0 ? ctxMs : ivlMs * 200;
   const afterPad = ivlMs * 30;
@@ -163,30 +292,44 @@ async function fetchCandlesClientSide(rawSymbol: string, start: number, end: num
 
   let data: Candle[] | null = null;
   let source = '';
+  const tried: string[] = [];
 
-  // 1. Binance
-  data = await fetchBinanceDirect(sym, paddedStart, paddedEnd, ivl);
-  if (data) source = 'Binance';
+  if (hlSpot) {
+    // ── HL SPOT PATH: resolve @index first, then fall back to CEXes ──
+    const spotIndex = await getHlSpotIndex(base);
+    if (spotIndex) {
+      data = await fetchHyperliquidDirect(spotIndex, paddedStart, paddedEnd, ivl);
+      if (data) source = `HL spot (${base}=${spotIndex})`;
+    }
+    if (!data) { tried.push('hl-spot'); }
 
-  // 2. Bybit spot
-  if (!data) { data = await fetchBybitDirect(sym, paddedStart, paddedEnd, ivl, 'spot'); if (data) source = 'Bybit'; }
+    // Fallback: maybe it's also listed on Binance/Bybit under the base name
+    if (!data) { data = await fetchBinanceDirect(base, paddedStart, paddedEnd, ivl); if (data) source = 'Binance'; else tried.push('binance'); }
+    if (!data) { data = await fetchBybitDirect(base, paddedStart, paddedEnd, ivl, 'spot'); if (data) source = 'Bybit'; else tried.push('bybit'); }
+  } else {
+    // ── PERP / CEX PATH: Binance → Bybit → HL perp → HL spot (last resort) ──
+    data = await fetchBinanceDirect(base, paddedStart, paddedEnd, ivl);
+    if (data) source = 'Binance'; else tried.push('binance');
 
-  // 3. Bybit perps
-  if (!data) { data = await fetchBybitDirect(sym, paddedStart, paddedEnd, ivl, 'linear'); if (data) source = 'Bybit'; }
+    if (!data) { data = await fetchBybitDirect(base, paddedStart, paddedEnd, ivl, 'spot'); if (data) source = 'Bybit'; else tried.push('bybit-spot'); }
+    if (!data) { data = await fetchBybitDirect(base, paddedStart, paddedEnd, ivl, 'linear'); if (data) source = 'Bybit'; else tried.push('bybit-perp'); }
 
-  // 4. Hyperliquid perps
-  if (!data) { data = await fetchHyperliquidDirect(sym, paddedStart, paddedEnd, ivl); if (data) source = 'Hyperliquid'; }
+    // HL perp: use bare name directly
+    if (!data) { data = await fetchHyperliquidDirect(base, paddedStart, paddedEnd, ivl); if (data) source = 'Hyperliquid'; else tried.push('hl-perp'); }
 
-  // 5. Hyperliquid spot (@N suffixes)
-  if (!data && rawSymbol.includes('/')) {
-    for (const suffix of ['@1', '@2', '@3']) {
-      data = await fetchHyperliquidDirect(sym + suffix, paddedStart, paddedEnd, ivl);
-      if (data) { source = `HL spot (${sym}${suffix})`; break; }
+    // Last resort: maybe it's actually a spot token without /USDC in the symbol
+    if (!data) {
+      const spotIndex = await getHlSpotIndex(base);
+      if (spotIndex) {
+        data = await fetchHyperliquidDirect(spotIndex, paddedStart, paddedEnd, ivl);
+        if (data) source = `HL spot (${base}=${spotIndex})`;
+      }
+      if (!data) tried.push('hl-spot');
     }
   }
 
   if (!data || data.length === 0) {
-    throw new Error(`No candle data for ${sym}. Tried Binance, Bybit, Hyperliquid.`);
+    throw new Error(`No candle data for ${base}. Tried ${tried.join(', ')}.`);
   }
 
   // Deduplicate and sort
