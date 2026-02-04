@@ -593,12 +593,40 @@ export default function TradeJournal() {
             </div>
 
             <div className="card" style={{ padding: '1rem 1.25rem' }}>
-              <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#f0f2f5', marginBottom: '0.5rem' }}>📋 How to export</div>
-              <div style={{ fontSize: '0.7rem', color: '#8b9099', lineHeight: 1.7 }}>
-                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Hyperliquid:</b> Portfolio → Trade History → Export CSV</p>
-                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Binance:</b> Orders → Trade History → Export</p>
-                <p style={{ marginBottom: '0.4rem' }}><b style={{ color: '#f5a623' }}>Bybit:</b> Orders → Trade History → Export</p>
-                <p><b style={{ color: '#f5a623' }}>Custom:</b> Needs columns: <code style={{ fontSize: '0.65rem', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>symbol, side, price</code> (+ optional: size, time, fee, closedPnl)</p>
+              <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#f0f2f5', marginBottom: '0.75rem' }}>📋 How to export your trade history</div>
+              <div style={{ fontSize: '0.7rem', color: '#8b9099', lineHeight: 1.8 }}>
+                <div style={{ marginBottom: '0.6rem', padding: '0.5rem 0.6rem', borderRadius: 6, background: 'rgba(79,140,255,0.04)', border: '1px solid rgba(79,140,255,0.08)' }}>
+                  <b style={{ color: '#4f8cff', fontSize: '0.68rem' }}>⚡ Auto-detected</b>
+                  <span style={{ color: '#8b9099', fontSize: '0.65rem', marginLeft: '0.4rem' }}>— Just upload the CSV as-is. No renaming columns or converting to xlsx needed.</span>
+                </div>
+                <p style={{ marginBottom: '0.5rem' }}>
+                  <b style={{ color: '#f5a623' }}>Hyperliquid:</b> Portfolio → Trade History → Export CSV
+                  <br /><span style={{ color: '#545b66', fontSize: '0.63rem' }}>Exports as TSV with columns: time, coin, Direction, Price, Size, Trade Volume, Fee, closedPnl</span>
+                </p>
+                <p style={{ marginBottom: '0.5rem' }}>
+                  <b style={{ color: '#f5a623' }}>Binance (Spot):</b> Orders → Spot Order → Trade History → Export
+                  <br /><span style={{ color: '#545b66', fontSize: '0.63rem' }}>CSV with columns: Date(UTC), Pair, Side, Price, Executed, Amount, Fee. Max 3 months per export.</span>
+                </p>
+                <p style={{ marginBottom: '0.5rem' }}>
+                  <b style={{ color: '#f5a623' }}>Binance (Futures):</b> Orders → Futures Order → Trade History → Export
+                  <br /><span style={{ color: '#545b66', fontSize: '0.63rem' }}>CSV with: Date(UTC), Symbol, Side, Price, Quantity, Commission, Realized Profit</span>
+                </p>
+                <p style={{ marginBottom: '0.5rem' }}>
+                  <b style={{ color: '#f5a623' }}>Bybit (Spot):</b> Orders → Spot Order → Trade History → Export
+                  <br /><span style={{ color: '#545b66', fontSize: '0.63rem' }}>CSV with: Symbol, Side, Price, Qty, Fee, Fee Currency, Time(UTC)</span>
+                </p>
+                <p style={{ marginBottom: '0.5rem' }}>
+                  <b style={{ color: '#f5a623' }}>Bybit (Derivatives):</b> Orders → Derivatives Order → Trade History → Export
+                  <br /><span style={{ color: '#545b66', fontSize: '0.63rem' }}>Both TradeHistory and Closed P&L formats supported. Export &quot;Trade History&quot; not &quot;Order History&quot;.</span>
+                </p>
+                <p style={{ marginBottom: '0.5rem' }}>
+                  <b style={{ color: '#f5a623' }}>OKX:</b> Assets → Order History → Trade History → Export
+                  <br /><span style={{ color: '#545b66', fontSize: '0.63rem' }}>CSV with: Instrument ID, Order time, Side, Filled Price, Filled Qty, Fee. Max 3 months per export.</span>
+                </p>
+                <p>
+                  <b style={{ color: '#f5a623' }}>Custom CSV:</b> Any CSV/TSV with at least: <code style={{ fontSize: '0.62rem', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>symbol</code> + <code style={{ fontSize: '0.62rem', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>side</code> + <code style={{ fontSize: '0.62rem', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>price</code>
+                  <br /><span style={{ color: '#545b66', fontSize: '0.63rem' }}>Optional: quantity/size, time/date, fee, closedPnl/realized profit. Column names are flexible.</span>
+                </p>
               </div>
             </div>
           </>

@@ -34,16 +34,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No data provided' }, { status: 400 });
     }
 
-    // Parse trades from raw CSV/TSV text
     const trades = parseTrades(rawText);
     if (trades.length === 0) {
       return NextResponse.json({ error: 'No valid trades found. Check file format.' }, { status: 400 });
     }
 
-    // Group trades into round-trip positions
     const groups = groupIntoRoundTrips(trades);
 
-    // Calculate stats
     const totalTrades = groups.length;
     const winners = groups.filter(g => g.pnl > 0);
     const losers = groups.filter(g => g.pnl <= 0);
@@ -58,7 +55,6 @@ export async function POST(req: Request) {
     const biggestWin = winners.length > 0 ? winners.sort((a, b) => b.pnl - a.pnl)[0] : null;
     const biggestLoss = losers.length > 0 ? losers.sort((a, b) => a.pnl - b.pnl)[0] : null;
 
-    // Symbols traded
     const symbolSet = new Set(groups.map(g => g.symbol));
     const symbolStats = Array.from(symbolSet).map(sym => {
       const symGroups = groups.filter(g => g.symbol === sym);
@@ -85,7 +81,6 @@ export async function POST(req: Request) {
       uniqueSymbols: symbolSet.size,
     };
 
-    // AI Analysis
     let analysis = '';
     const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
     if (ANTHROPIC_KEY) {
@@ -132,66 +127,256 @@ Keep it under 400 words. No disclaimers. Reference their actual trades and numbe
 }
 
 // ═══════════════════════════════════════════════
-// PARSING
+// EXCHANGE FORMAT DETECTION
+// ═══════════════════════════════════════════════
+
+type ExchangeFormat = 'hyperliquid' | 'binance-spot' | 'binance-futures' | 'bybit-spot' | 'bybit-derivs' | 'bybit-closed-pnl' | 'okx' | 'generic';
+
+function detectExchange(headers: string[]): ExchangeFormat {
+  const h = headers.join('|');
+
+  // Hyperliquid: time coin direction price size trade volume fee closedpnl
+  if (h.includes('closedpnl') && h.includes('coin')) return 'hyperliquid';
+  if (h.includes('trade volume') && h.includes('coin')) return 'hyperliquid';
+
+  // Binance Spot: Date(UTC),Pair,Side,Price,Executed,Amount,Fee
+  if (h.includes('date(utc)') && (h.includes('pair') || h.includes('market'))) return 'binance-spot';
+
+  // Binance Futures: includes "realized profit" or "quote quantity"
+  if (h.includes('realized profit') || h.includes('realised profit')) return 'binance-futures';
+  if (h.includes('quote quantity') && h.includes('commission')) return 'binance-futures';
+
+  // Bybit Closed P&L (old): Contracts,Closing Direction,Qty,Entry Price,Exit Price,Closed P&L
+  if (h.includes('closing direction') && h.includes('entry price') && h.includes('exit price')) return 'bybit-closed-pnl';
+  if (h.includes('contracts') && h.includes('closing direction')) return 'bybit-closed-pnl';
+
+  // Bybit Spot: has "fee currency"
+  if (h.includes('fee currency') && !h.includes('closing direction')) return 'bybit-spot';
+  if (h.includes('avg. filled') || h.includes('avg filled')) return 'bybit-spot';
+
+  // Bybit Derivs: has "exec price" or "exec type"
+  if (h.includes('exec price') || h.includes('exec type')) return 'bybit-derivs';
+
+  // OKX: has "instrument" or "instid" or "fillpx"
+  if (h.includes('instrument') || h.includes('instid') || h.includes('inst id')) return 'okx';
+  if (h.includes('fillpx') || h.includes('filled price') || h.includes('fill price')) return 'okx';
+
+  return 'generic';
+}
+
+// ═══════════════════════════════════════════════
+// COLUMN MAPPING
+// ═══════════════════════════════════════════════
+
+interface ColMap {
+  time: number; symbol: number; side: number; price: number; size: number;
+  fee: number; pnl: number; vol: number;
+  entryPrice: number; exitPrice: number; closingDir: number;
+}
+
+function fc(headers: string[], ...patterns: string[]): number {
+  for (const p of patterns) {
+    const idx = headers.findIndex(h => h === p);
+    if (idx !== -1) return idx;
+  }
+  for (const p of patterns) {
+    const idx = headers.findIndex(h => h.includes(p));
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+function mapColumns(fmt: ExchangeFormat, hdr: string[]): ColMap {
+  const m: ColMap = { time: -1, symbol: -1, side: -1, price: -1, size: -1, fee: -1, pnl: -1, vol: -1, entryPrice: -1, exitPrice: -1, closingDir: -1 };
+
+  switch (fmt) {
+    case 'hyperliquid':
+      m.time = fc(hdr, 'time', 'date');
+      m.symbol = fc(hdr, 'coin', 'symbol');
+      m.side = fc(hdr, 'direction', 'side');
+      m.price = fc(hdr, 'price');
+      m.size = fc(hdr, 'size', 'quantity', 'qty');
+      m.fee = fc(hdr, 'fee');
+      m.pnl = fc(hdr, 'closedpnl', 'closed pnl');
+      m.vol = fc(hdr, 'trade volume', 'volume');
+      break;
+    case 'binance-spot':
+      m.time = fc(hdr, 'date(utc)', 'date', 'time');
+      m.symbol = fc(hdr, 'pair', 'market', 'symbol');
+      m.side = fc(hdr, 'side', 'type');
+      m.price = fc(hdr, 'price');
+      m.size = fc(hdr, 'executed', 'amount', 'quantity', 'qty');
+      m.fee = fc(hdr, 'fee', 'commission');
+      m.vol = fc(hdr, 'total', 'amount');
+      break;
+    case 'binance-futures':
+      m.time = fc(hdr, 'date(utc)', 'date', 'time');
+      m.symbol = fc(hdr, 'symbol', 'pair');
+      m.side = fc(hdr, 'side', 'type');
+      m.price = fc(hdr, 'price');
+      m.size = fc(hdr, 'quantity', 'qty', 'filled qty');
+      m.fee = fc(hdr, 'commission', 'fee');
+      m.pnl = fc(hdr, 'realized profit', 'realised profit', 'pnl');
+      m.vol = fc(hdr, 'quote quantity', 'total');
+      break;
+    case 'bybit-spot':
+      m.time = fc(hdr, 'time(utc)', 'time', 'date', 'created time');
+      m.symbol = fc(hdr, 'symbol', 'trading pair');
+      m.side = fc(hdr, 'side', 'direction');
+      m.price = fc(hdr, 'avg. filled price', 'avg filled price', 'price', 'exec price');
+      m.size = fc(hdr, 'filled qty', 'qty', 'quantity', 'size');
+      m.fee = fc(hdr, 'fee', 'commission');
+      m.pnl = fc(hdr, 'closed p&l', 'closed pnl', 'pnl');
+      m.vol = fc(hdr, 'total', 'volume');
+      break;
+    case 'bybit-closed-pnl':
+      m.time = fc(hdr, 'trade time', 'time', 'date');
+      m.symbol = fc(hdr, 'contracts', 'symbol');
+      m.closingDir = fc(hdr, 'closing direction');
+      m.side = fc(hdr, 'closing direction', 'side');
+      m.size = fc(hdr, 'qty', 'quantity', 'size');
+      m.entryPrice = fc(hdr, 'entry price');
+      m.exitPrice = fc(hdr, 'exit price');
+      m.price = fc(hdr, 'entry price', 'price');
+      m.pnl = fc(hdr, 'closed p&l', 'closed pnl', 'pnl');
+      m.fee = fc(hdr, 'fee');
+      break;
+    case 'bybit-derivs':
+      m.time = fc(hdr, 'time', 'date', 'created time', 'trade time');
+      m.symbol = fc(hdr, 'symbol', 'contracts');
+      m.side = fc(hdr, 'side', 'direction');
+      m.price = fc(hdr, 'exec price', 'price', 'avg. filled price');
+      m.size = fc(hdr, 'qty', 'quantity', 'size', 'filled qty');
+      m.fee = fc(hdr, 'fee', 'commission');
+      m.pnl = fc(hdr, 'closed p&l', 'closed pnl', 'pnl');
+      m.vol = fc(hdr, 'exec value', 'volume', 'total');
+      break;
+    case 'okx':
+      m.time = fc(hdr, 'order time', 'time', 'date', 'created time', 'timestamp');
+      m.symbol = fc(hdr, 'instrument id', 'instrument', 'instid', 'inst id', 'underlying', 'symbol');
+      m.side = fc(hdr, 'side', 'direction');
+      m.price = fc(hdr, 'filled price', 'fill price', 'fillpx', 'price', 'avg price');
+      m.size = fc(hdr, 'filled qty', 'fillsz', 'qty', 'quantity', 'size', 'amount');
+      m.fee = fc(hdr, 'fee', 'commission');
+      m.pnl = fc(hdr, 'pnl', 'realized pnl', 'profit');
+      m.vol = fc(hdr, 'volume', 'total');
+      break;
+    default: // generic
+      m.time = fc(hdr, 'time', 'date', 'timestamp', 'created', 'datetime', 'order time', 'trade time', 'execution time');
+      m.symbol = fc(hdr, 'coin', 'symbol', 'pair', 'market', 'asset', 'instrument', 'instid', 'contracts', 'trading pair', 'instrument id', 'ticker');
+      m.side = fc(hdr, 'direction', 'side', 'type', 'order type', 'closing direction', 'action');
+      m.price = fc(hdr, 'price', 'avg filled price', 'avg. filled price', 'exec price', 'filled price', 'fill price', 'fillpx', 'deal price', 'execution price', 'trade price');
+      m.size = fc(hdr, 'size', 'quantity', 'qty', 'amount', 'filled', 'executed', 'filled qty', 'fillsz', 'contracts');
+      m.fee = fc(hdr, 'fee', 'commission', 'trading fee');
+      m.pnl = fc(hdr, 'closedpnl', 'closed pnl', 'closed p&l', 'realized profit', 'realised pnl', 'realised profit', 'realized pnl', 'pnl', 'profit');
+      m.vol = fc(hdr, 'trade volume', 'volume', 'total', 'filled value', 'quote quantity', 'exec value', 'notional');
+      m.entryPrice = fc(hdr, 'entry price');
+      m.exitPrice = fc(hdr, 'exit price');
+      m.closingDir = fc(hdr, 'closing direction');
+  }
+  return m;
+}
+
+// ═══════════════════════════════════════════════
+// MAIN PARSER
 // ═══════════════════════════════════════════════
 
 function parseTrades(text: string): RawTrade[] {
   const lines = text.trim().split('\n').filter(l => l.trim());
   if (lines.length < 2) return [];
 
-  // Detect delimiter: tab or comma
   const firstLine = lines[0];
   const isTab = firstLine.split('\t').length > firstLine.split(',').length;
   const delimiter = isTab ? '\t' : ',';
 
-  const headers = lines[0].split(delimiter).map(h => h.trim().toLowerCase().replace(/['"]/g, '').replace(/\s+/g, ' '));
+  const rawHeaders = lines[0].split(delimiter).map(h => h.trim().replace(/['"]/g, ''));
+  const headers = rawHeaders.map(h => h.toLowerCase().replace(/\s+/g, ' '));
 
-  // Find columns flexibly
-  const findCol = (...names: string[]) => {
-    return headers.findIndex(h => names.some(n => h === n || h.includes(n)));
-  };
+  const fmt = detectExchange(headers);
+  const cm = mapColumns(fmt, headers);
 
-  const timeCol = findCol('time', 'date', 'timestamp', 'created');
-  const symbolCol = findCol('coin', 'symbol', 'pair', 'market', 'asset');
-  const sideCol = findCol('direction', 'side', 'type', 'order type');
-  const priceCol = findCol('price', 'avg filled price', 'exec price', 'deal price');
-  const sizeCol = findCol('size', 'quantity', 'qty', 'amount', 'filled', 'executed');
-  const feeCol = findCol('fee', 'commission');
-  const pnlCol = findCol('closedpnl', 'closed pnl', 'realized profit', 'realised pnl', 'pnl');
-  const volCol = findCol('trade volume', 'volume', 'total', 'filled value');
+  if (cm.symbol === -1 || (cm.price === -1 && cm.entryPrice === -1)) {
+    throw new Error(
+      `Cannot detect required columns.\n\nHeaders found: ${rawHeaders.join(', ')}\n\n` +
+      `Supported formats:\n` +
+      `• Hyperliquid: Export from Portfolio → Trade History → Export CSV\n` +
+      `• Binance: Orders → Spot Order → Trade History → Export\n` +
+      `• Bybit: Orders → Spot/Derivatives → Trade History → Export\n` +
+      `• OKX: Assets → Order History → Trade History → Export\n` +
+      `• Custom: Any CSV with columns: symbol, side, price (+ optional: qty, time, fee, pnl)`
+    );
+  }
 
-  if (symbolCol === -1 || sideCol === -1 || priceCol === -1) {
-    throw new Error(`Cannot detect columns. Headers found: ${headers.join(', ')}`);
+  // Bybit Closed P&L is special: each row = complete round trip
+  if (fmt === 'bybit-closed-pnl' && cm.entryPrice !== -1 && cm.exitPrice !== -1) {
+    return parseBybitClosedPnl(lines, delimiter, cm);
   }
 
   const trades: RawTrade[] = [];
-
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
-
     const cols = splitLine(line, delimiter);
 
-    const price = parseNum(cols[priceCol]);
+    const price = parseNum(cols[cm.price]);
     if (!price || price <= 0) continue;
 
-    const symbol = cleanSymbol(cols[symbolCol] || '');
+    const symbol = cleanSymbol(cols[cm.symbol] || '', fmt);
     if (!symbol) continue;
 
-    const side = parseSide(cols[sideCol] || '');
+    const side = cm.side !== -1 ? parseSide(cols[cm.side] || '') : '';
     if (!side) continue;
 
-    const quantity = sizeCol !== -1 ? Math.abs(parseNum(cols[sizeCol])) || 1 : 1;
-    const timestamp = timeCol !== -1 ? parseTimestamp(cols[timeCol]) : Date.now();
-    const fee = feeCol !== -1 ? Math.abs(parseNum(cols[feeCol])) || 0 : 0;
-    const closedPnl = pnlCol !== -1 ? parseNum(cols[pnlCol]) || 0 : 0;
-    const volume = volCol !== -1 ? parseNum(cols[volCol]) || 0 : price * quantity;
+    const quantity = cm.size !== -1 ? Math.abs(parseNum(cols[cm.size])) || 1 : 1;
+    const timestamp = cm.time !== -1 ? parseTimestamp(cols[cm.time]) : Date.now();
+    const fee = cm.fee !== -1 ? Math.abs(parseNum(cols[cm.fee])) || 0 : 0;
+    const closedPnl = cm.pnl !== -1 ? parseNum(cols[cm.pnl]) || 0 : 0;
+    const volume = cm.vol !== -1 ? parseNum(cols[cm.vol]) || 0 : price * quantity;
 
     trades.push({ symbol, side, price, quantity, timestamp, fee, closedPnl, volume });
   }
 
   return trades.sort((a, b) => a.timestamp - b.timestamp);
 }
+
+// Bybit Closed P&L: each row has entry+exit in one line
+function parseBybitClosedPnl(lines: string[], delimiter: string, cm: ColMap): RawTrade[] {
+  const trades: RawTrade[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const cols = splitLine(line, delimiter);
+
+    const entryPrice = parseNum(cols[cm.entryPrice]);
+    const exitPrice = parseNum(cols[cm.exitPrice]);
+    if (!entryPrice || !exitPrice) continue;
+
+    const symbol = cleanSymbol(cols[cm.symbol] || '', 'bybit-closed-pnl');
+    if (!symbol) continue;
+
+    const qty = cm.size !== -1 ? Math.abs(parseNum(cols[cm.size])) || 1 : 1;
+    const timestamp = cm.time !== -1 ? parseTimestamp(cols[cm.time]) : Date.now();
+    const closedPnl = cm.pnl !== -1 ? parseNum(cols[cm.pnl]) || 0 : 0;
+    const fee = cm.fee !== -1 ? Math.abs(parseNum(cols[cm.fee])) || 0 : 0;
+
+    // "Closing Direction" = how position was closed
+    // Sell to close = was Long | Buy to close = was Short
+    const closingDir = cm.closingDir !== -1 ? parseSide(cols[cm.closingDir] || '') : '';
+
+    if (closingDir === 'sell') {
+      trades.push({ symbol, side: 'buy', price: entryPrice, quantity: qty, timestamp: timestamp - 1000, fee: fee / 2, closedPnl: 0, volume: entryPrice * qty });
+      trades.push({ symbol, side: 'sell', price: exitPrice, quantity: qty, timestamp, fee: fee / 2, closedPnl, volume: exitPrice * qty });
+    } else if (closingDir === 'buy') {
+      trades.push({ symbol, side: 'sell', price: entryPrice, quantity: qty, timestamp: timestamp - 1000, fee: fee / 2, closedPnl: 0, volume: entryPrice * qty });
+      trades.push({ symbol, side: 'buy', price: exitPrice, quantity: qty, timestamp, fee: fee / 2, closedPnl, volume: exitPrice * qty });
+    }
+  }
+  return trades.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+// ═══════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════
 
 function splitLine(line: string, delimiter: string): string[] {
   const cols: string[] = [];
@@ -206,52 +391,107 @@ function splitLine(line: string, delimiter: string): string[] {
   return cols;
 }
 
-function cleanSymbol(s: string): string {
-  return s.replace(/[-_\/]/g, '').replace(/USDT|USDC|USD|BUSD|PERP/gi, '').toUpperCase().trim();
+function cleanSymbol(s: string, fmt: ExchangeFormat): string {
+  if (!s) return '';
+  s = s.trim().replace(/['"]/g, '');
+
+  // Hyperliquid: keep as-is (HYPE/USDC, BTC, COPPER (xyz), kPEPE)
+  if (fmt === 'hyperliquid') return s.toUpperCase().trim();
+
+  // Binance: BTCUSDT → BTC
+  if (fmt === 'binance-spot' || fmt === 'binance-futures') {
+    s = s.toUpperCase();
+    for (const q of ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'USD', 'AUD', 'EUR', 'GBP', 'BRL', 'TRY', 'JPY', 'BTC', 'ETH', 'BNB']) {
+      if (s.endsWith(q) && s.length > q.length) { s = s.slice(0, -q.length); break; }
+    }
+    return s;
+  }
+
+  // Bybit: BTCUSDT → BTC
+  if (fmt === 'bybit-spot' || fmt === 'bybit-derivs' || fmt === 'bybit-closed-pnl') {
+    s = s.toUpperCase();
+    for (const q of ['USDT', 'USDC', 'PERP', 'USD']) {
+      if (s.endsWith(q) && s.length > q.length) { s = s.slice(0, -q.length); break; }
+    }
+    return s;
+  }
+
+  // OKX: BTC-USDT or BTC-USDT-SWAP → BTC
+  if (fmt === 'okx') {
+    s = s.toUpperCase();
+    const parts = s.split('-');
+    return parts[0] || s;
+  }
+
+  // Generic
+  s = s.toUpperCase();
+  s = s.replace(/[-_\/]/g, '');
+  s = s.replace(/USDT|USDC|USD|BUSD|PERP/gi, '');
+  return s.trim();
 }
 
 function parseSide(val: string): string {
   const v = val.toLowerCase().trim();
-  if (v === 'buy' || v === 'long' || v.includes('buy')) return 'buy';
-  if (v === 'sell' || v === 'short' || v.includes('sell')) return 'sell';
+  if (v === 'buy' || v === 'long' || v === 'bid') return 'buy';
+  if (v === 'sell' || v === 'short' || v === 'ask') return 'sell';
+  if (v.includes('buy') || v === 'open long' || v === 'close short') return 'buy';
+  if (v.includes('sell') || v === 'open short' || v === 'close long') return 'sell';
   return '';
 }
 
 function parseNum(val: string): number {
   if (!val) return 0;
-  // Remove currency symbols, spaces, commas
-  const cleaned = val.replace(/[$€£,\s]/g, '').trim();
+  let cleaned = val.replace(/[$€£,\s]/g, '').trim();
+  cleaned = cleaned.replace(/[A-Za-z]+$/, ''); // strip trailing units like "ETH"
   const num = parseFloat(cleaned);
   return isNaN(num) ? 0 : num;
 }
 
 function parseTimestamp(val: string): number {
   if (!val) return 0;
-  val = val.trim();
+  val = val.trim().replace(/['"]/g, '');
 
-  // Handle "MM/DD/YYYY - HH:MM:SS" (Hyperliquid format)
+  // "MM/DD/YYYY - HH:MM:SS" (Hyperliquid)
   const hlMatch = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s*-\s*(\d{1,2}):(\d{2}):(\d{2})$/);
   if (hlMatch) {
     const [, month, day, year, hour, min, sec] = hlMatch;
     return new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hour.padStart(2, '0')}:${min}:${sec}Z`).getTime();
   }
 
-  // Handle "YYYY-MM-DD HH:MM:SS"
-  const isoMatch = val.match(/^\d{4}-\d{2}-\d{2}/);
-  if (isoMatch) {
-    const d = new Date(val.replace(' ', 'T') + (val.includes('Z') ? '' : 'Z'));
+  // "DD/MM/YYYY HH:MM:SS" or "MM/DD/YYYY HH:MM:SS"
+  const slashDate = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[\s,]*(\d{1,2}:\d{2}:\d{2})?$/);
+  if (slashDate) {
+    const [, p1, p2, year, time] = slashDate;
+    const d1 = parseInt(p1), d2 = parseInt(p2);
+    let month: string, day: string;
+    if (d1 > 12) { day = p1; month = p2; }
+    else if (d2 > 12) { month = p1; day = p2; }
+    else { month = p1; day = p2; }
+    return new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${time || '00:00:00'}Z`).getTime();
+  }
+
+  // "YYYY-MM-DD HH:MM:SS"
+  if (/^\d{4}-\d{2}-\d{2}/.test(val)) {
+    const d = new Date(val.replace(' ', 'T') + (val.includes('Z') || val.includes('+') ? '' : 'Z'));
     if (!isNaN(d.getTime())) return d.getTime();
+  }
+
+  // "YYYY/MM/DD HH:MM:SS"
+  const slashIso = val.match(/^(\d{4})\/(\d{2})\/(\d{2})\s*(.*)?$/);
+  if (slashIso) {
+    const [, y, m, d, time] = slashIso;
+    return new Date(`${y}-${m}-${d}T${time || '00:00:00'}Z`).getTime();
   }
 
   // Unix timestamp
   const num = Number(val);
-  if (!isNaN(num)) {
-    if (num > 1e15) return num / 1000; // microseconds
-    if (num > 1e12) return num; // milliseconds
-    if (num > 1e9) return num * 1000; // seconds
+  if (!isNaN(num) && num > 0) {
+    if (num > 1e15) return Math.floor(num / 1000);
+    if (num > 1e12) return num;
+    if (num > 1e9) return num * 1000;
   }
 
-  // Fallback: try Date constructor
+  // Fallback
   const d = new Date(val);
   if (!isNaN(d.getTime())) return d.getTime();
 
@@ -259,11 +499,10 @@ function parseTimestamp(val: string): number {
 }
 
 // ═══════════════════════════════════════════════
-// TRADE GROUPING - Round Trip Detection
+// TRADE GROUPING
 // ═══════════════════════════════════════════════
 
 function groupIntoRoundTrips(trades: RawTrade[]): TradeGroup[] {
-  // Group by symbol
   const bySymbol = new Map<string, RawTrade[]>();
   for (const t of trades) {
     if (!bySymbol.has(t.symbol)) bySymbol.set(t.symbol, []);
@@ -273,19 +512,16 @@ function groupIntoRoundTrips(trades: RawTrade[]): TradeGroup[] {
   const allGroups: TradeGroup[] = [];
 
   for (const [symbol, symbolTrades] of bySymbol) {
-    // Track position size
     let position = 0;
     let currentEntries: RawTrade[] = [];
     let currentExits: RawTrade[] = [];
-    let direction = ''; // 'long' or 'short'
+    let direction = '';
 
     for (const trade of symbolTrades) {
       const isBuy = trade.side === 'buy';
 
       if (position === 0 || Math.abs(position) < 0.001) {
-        // Starting new position
         if (currentEntries.length > 0 && currentExits.length > 0) {
-          // Save previous round trip
           const group = buildGroup(symbol, currentEntries, currentExits, direction);
           if (group) allGroups.push(group);
         }
@@ -294,15 +530,11 @@ function groupIntoRoundTrips(trades: RawTrade[]): TradeGroup[] {
         direction = isBuy ? 'long' : 'short';
         position = isBuy ? trade.quantity : -trade.quantity;
       } else if ((direction === 'long' && isBuy) || (direction === 'short' && !isBuy)) {
-        // Adding to position
         currentEntries.push(trade);
         position += isBuy ? trade.quantity : -trade.quantity;
       } else {
-        // Closing position (partially or fully)
         currentExits.push(trade);
         position += isBuy ? trade.quantity : -trade.quantity;
-
-        // Check if position is closed (near zero)
         if (Math.abs(position) < 0.001) {
           const group = buildGroup(symbol, currentEntries, currentExits, direction);
           if (group) allGroups.push(group);
@@ -314,18 +546,13 @@ function groupIntoRoundTrips(trades: RawTrade[]): TradeGroup[] {
       }
     }
 
-    // Handle any remaining open position with partial closes
     if (currentEntries.length > 0 && currentExits.length > 0) {
       const group = buildGroup(symbol, currentEntries, currentExits, direction);
       if (group) allGroups.push(group);
     }
   }
 
-  return allGroups.sort((a, b) => {
-    const aTime = a.entries[0]?.timestamp || 0;
-    const bTime = b.entries[0]?.timestamp || 0;
-    return aTime - bTime;
-  });
+  return allGroups.sort((a, b) => (a.entries[0]?.timestamp || 0) - (b.entries[0]?.timestamp || 0));
 }
 
 function buildGroup(symbol: string, entries: RawTrade[], exits: RawTrade[], direction: string): TradeGroup | null {
@@ -335,40 +562,25 @@ function buildGroup(symbol: string, entries: RawTrade[], exits: RawTrade[], dire
   const exitQty = exits.reduce((s, e) => s + e.quantity, 0);
   const entryAvg = entries.reduce((s, e) => s + e.price * e.quantity, 0) / entryQty;
   const exitAvg = exits.reduce((s, e) => s + e.price * e.quantity, 0) / exitQty;
-
   const usedQty = Math.min(entryQty, exitQty);
 
   let pnl: number;
-  // If we have closedPnl from exchange, use it (more accurate)
   const exitPnlSum = exits.reduce((s, e) => s + e.closedPnl, 0);
   if (Math.abs(exitPnlSum) > 0.01) {
     pnl = exitPnlSum;
   } else {
-    // Calculate from prices
-    if (direction === 'long') {
-      pnl = (exitAvg - entryAvg) * usedQty;
-    } else {
-      pnl = (entryAvg - exitAvg) * usedQty;
-    }
+    pnl = direction === 'long' ? (exitAvg - entryAvg) * usedQty : (entryAvg - exitAvg) * usedQty;
   }
 
   const pnlPercent = direction === 'long'
     ? ((exitAvg - entryAvg) / entryAvg) * 100
     : ((entryAvg - exitAvg) / entryAvg) * 100;
 
-  const holdingTime = exits[exits.length - 1].timestamp - entries[0].timestamp;
-
   return {
-    symbol,
-    entries: [...entries],
-    exits: [...exits],
-    pnl,
-    pnlPercent,
-    holdingTime,
-    entryAvg,
-    exitAvg,
-    entryQty: usedQty,
-    direction,
+    symbol, entries: [...entries], exits: [...exits],
+    pnl, pnlPercent,
+    holdingTime: exits[exits.length - 1].timestamp - entries[0].timestamp,
+    entryAvg, exitAvg, entryQty: usedQty, direction,
   };
 }
 
@@ -382,11 +594,9 @@ function buildStatsPrompt(stats: any, groups: TradeGroup[]): string {
     `Risk/Reward: ${stats.riskReward}`,
     `Average holding time: ${stats.avgHoldingTime}`,
     `Symbols traded: ${stats.uniqueSymbols}`,
-    ``,
-    `BY SYMBOL:`,
+    ``, `BY SYMBOL:`,
     ...stats.symbolStats.slice(0, 10).map((s: any) => `  ${s.symbol}: ${s.trades} trades, $${s.pnl.toFixed(2)} P&L, ${s.winRate}% win rate`),
-    ``,
-    `RECENT TRADES (last 20):`,
+    ``, `RECENT TRADES (last 20):`,
     ...groups.slice(-20).map((g: TradeGroup) =>
       `  ${g.symbol} ${g.direction.toUpperCase()}: ${g.pnl >= 0 ? '+' : ''}${g.pnlPercent.toFixed(2)}% ($${g.pnl.toFixed(2)}) | Entry $${g.entryAvg.toFixed(4)} → Exit $${g.exitAvg.toFixed(4)} | Held ${formatDuration(g.holdingTime)}`
     ),
