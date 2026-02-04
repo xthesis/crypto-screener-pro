@@ -63,6 +63,119 @@ export async function POST(req: Request) {
       return { symbol: sym, trades: symGroups.length, pnl: symPnl, winRate: (symWins / symGroups.length * 100).toFixed(0) };
     }).sort((a, b) => b.trades - a.trades);
 
+    // ── DEEP ANALYTICS ──
+    const sorted = [...groups].sort((a, b) => (a.entries[0]?.timestamp || 0) - (b.entries[0]?.timestamp || 0));
+
+    // Holding time buckets
+    const holdBucket = (arr: TradeGroup[]) => {
+      if (arr.length === 0) return { trades: 0, pnl: 0, winRate: '0', avgPnl: 0 };
+      const pnl = arr.reduce((s, g) => s + g.pnl, 0);
+      const wr = (arr.filter(g => g.pnl > 0).length / arr.length * 100).toFixed(1);
+      return { trades: arr.length, pnl: +pnl.toFixed(2), winRate: wr, avgPnl: +(pnl / arr.length).toFixed(2) };
+    };
+    const holdingTimeBuckets = {
+      'Scalps (<10m)': holdBucket(groups.filter(g => g.holdingTime > 0 && g.holdingTime < 600000)),
+      'Intraday (10m-4h)': holdBucket(groups.filter(g => g.holdingTime >= 600000 && g.holdingTime < 14400000)),
+      'Day (4h-1d)': holdBucket(groups.filter(g => g.holdingTime >= 14400000 && g.holdingTime < 86400000)),
+      'Swing (1d-7d)': holdBucket(groups.filter(g => g.holdingTime >= 86400000 && g.holdingTime < 604800000)),
+      'Position (>7d)': holdBucket(groups.filter(g => g.holdingTime >= 604800000)),
+    };
+
+    // Session performance (UTC hours)
+    const sessionBucket = (hours: number[]) => {
+      const arr = groups.filter(g => {
+        const h = g.entries[0]?.timestamp ? new Date(g.entries[0].timestamp).getUTCHours() : -1;
+        return hours.includes(h);
+      });
+      return holdBucket(arr);
+    };
+    const sessionPerformance = {
+      'Asia (00-08 UTC)': sessionBucket([0,1,2,3,4,5,6,7]),
+      'Europe (08-16 UTC)': sessionBucket([8,9,10,11,12,13,14,15]),
+      'US (16-24 UTC)': sessionBucket([16,17,18,19,20,21,22,23]),
+    };
+
+    // Day of week
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dayPerformance: Record<string, any> = {};
+    dayNames.forEach(d => {
+      const arr = groups.filter(g => {
+        const day = g.entries[0]?.timestamp ? dayNames[new Date(g.entries[0].timestamp).getUTCDay()] : null;
+        return day === d;
+      });
+      if (arr.length > 0) dayPerformance[d] = holdBucket(arr);
+    });
+
+    // Long vs Short
+    const longTrades = groups.filter(g => g.direction === 'long');
+    const shortTrades = groups.filter(g => g.direction === 'short');
+    const directionPerformance = {
+      long: holdBucket(longTrades),
+      short: holdBucket(shortTrades),
+    };
+
+    // Streak analysis + tilt detection
+    let maxWinStreak = 0, maxLossStreak = 0, curWin = 0, curLoss = 0;
+    // Track: after 3+ loss streak, what happens in next 3 trades?
+    let lossStreak = 0;
+    const postStreakResults: number[] = []; // pnl of trades right after 3+ loss streak
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].pnl > 0) {
+        curWin++; curLoss = 0;
+        if (curWin > maxWinStreak) maxWinStreak = curWin;
+        if (lossStreak >= 3) {
+          // This trade comes right after a 3+ loss streak
+          postStreakResults.push(sorted[i].pnl);
+        }
+        lossStreak = 0;
+      } else {
+        curLoss++; curWin = 0;
+        if (curLoss > maxLossStreak) maxLossStreak = curLoss;
+        lossStreak++;
+        if (lossStreak > 3) {
+          postStreakResults.push(sorted[i].pnl);
+        }
+      }
+    }
+    const tiltPnl = postStreakResults.length > 0 ? postStreakResults.reduce((s, v) => s + v, 0) : 0;
+    const tiltWinRate = postStreakResults.length > 0
+      ? (postStreakResults.filter(v => v > 0).length / postStreakResults.length * 100).toFixed(1)
+      : '0';
+
+    // Monthly P&L curve
+    const monthlyPnl: Record<string, number> = {};
+    sorted.forEach(g => {
+      const ts = g.exits[g.exits.length - 1]?.timestamp || g.entries[0]?.timestamp;
+      if (ts) {
+        const key = new Date(ts).toISOString().substring(0, 7); // YYYY-MM
+        monthlyPnl[key] = (monthlyPnl[key] || 0) + g.pnl;
+      }
+    });
+    const monthlyCurve = Object.entries(monthlyPnl).sort(([a], [b]) => a.localeCompare(b)).map(([month, pnl]) => ({ month, pnl: +pnl.toFixed(2) }));
+
+    // Cumulative P&L curve (sampled: max 100 points)
+    let cumPnl = 0;
+    const cumCurve: { trade: number; pnl: number }[] = [];
+    const step = Math.max(1, Math.floor(sorted.length / 100));
+    sorted.forEach((g, i) => {
+      cumPnl += g.pnl;
+      if (i % step === 0 || i === sorted.length - 1) {
+        cumCurve.push({ trade: i + 1, pnl: +cumPnl.toFixed(2) });
+      }
+    });
+
+    const deepAnalytics = {
+      holdingTimeBuckets,
+      sessionPerformance,
+      dayPerformance,
+      directionPerformance,
+      streaks: { maxWinStreak, maxLossStreak },
+      tilt: { tradesAfterLossStreak: postStreakResults.length, pnl: +tiltPnl.toFixed(2), winRate: tiltWinRate },
+      monthlyCurve,
+      cumCurve,
+      avgLossDollar: losers.length > 0 ? +(losers.reduce((s, g) => s + g.pnl, 0) / losers.length).toFixed(2) : 0,
+    };
+
     const stats = {
       totalTrades,
       totalRawTrades: trades.length,
@@ -85,7 +198,7 @@ export async function POST(req: Request) {
     let coachData: any = null;
     const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
     if (ANTHROPIC_KEY) {
-      const statsText = buildStatsPrompt(stats, groups);
+      const statsText = buildStatsPrompt(stats, groups, deepAnalytics);
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 25000); // 25s timeout
@@ -175,7 +288,7 @@ Rules:
       }
     }
 
-    return NextResponse.json({ stats, groups, analysis, coachData });
+    return NextResponse.json({ stats, groups, analysis, coachData, deepAnalytics });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -641,7 +754,7 @@ function buildGroup(symbol: string, entries: RawTrade[], exits: RawTrade[], dire
   };
 }
 
-function buildStatsPrompt(stats: any, groups: TradeGroup[]): string {
+function buildStatsPrompt(stats: any, groups: TradeGroup[], deep?: any): string {
   const lines = [
     `TRADING PERFORMANCE SUMMARY:`,
     `Total round-trip trades: ${stats.totalTrades} (from ${stats.totalRawTrades} raw executions)`,
@@ -651,15 +764,34 @@ function buildStatsPrompt(stats: any, groups: TradeGroup[]): string {
     `Risk/Reward: ${stats.riskReward}`,
     `Average holding time: ${stats.avgHoldingTime}`,
     `Symbols traded: ${stats.uniqueSymbols}`,
-    ``, `BY SYMBOL:`,
-    ...stats.symbolStats.slice(0, 10).map((s: any) => `  ${s.symbol}: ${s.trades} trades, $${s.pnl.toFixed(2)} P&L, ${s.winRate}% win rate`),
-    ``, `RECENT TRADES (last 20):`,
-    ...groups.slice(-20).map((g: TradeGroup) =>
-      `  ${g.symbol} ${g.direction.toUpperCase()}: ${g.pnl >= 0 ? '+' : ''}${g.pnlPercent.toFixed(2)}% ($${g.pnl.toFixed(2)}) | Entry $${g.entryAvg.toFixed(4)} → Exit $${g.exitAvg.toFixed(4)} | Held ${formatDuration(g.holdingTime)}`
-    ),
+    ``, `TOP SYMBOLS:`,
+    ...stats.symbolStats.slice(0, 12).map((s: any) => `  ${s.symbol}: ${s.trades} trades, $${s.pnl.toFixed(2)} P&L, ${s.winRate}% WR`),
   ];
   if (stats.biggestWin) lines.push(`\nBiggest win: ${stats.biggestWin.symbol} +${stats.biggestWin.pct}% ($${stats.biggestWin.pnl})`);
   if (stats.biggestLoss) lines.push(`Biggest loss: ${stats.biggestLoss.symbol} ${stats.biggestLoss.pct}% ($${stats.biggestLoss.pnl})`);
+
+  if (deep) {
+    lines.push('', 'HOLDING TIME ANALYSIS:');
+    Object.entries(deep.holdingTimeBuckets).forEach(([k, v]: [string, any]) => {
+      if (v.trades > 0) lines.push(`  ${k}: ${v.trades} trades, $${v.pnl} P&L, ${v.winRate}% WR`);
+    });
+    lines.push('', 'SESSION PERFORMANCE:');
+    Object.entries(deep.sessionPerformance).forEach(([k, v]: [string, any]) => {
+      if (v.trades > 0) lines.push(`  ${k}: ${v.trades} trades, $${v.pnl} P&L, ${v.winRate}% WR`);
+    });
+    lines.push('', 'LONG vs SHORT:');
+    lines.push(`  Long: ${deep.directionPerformance.long.trades} trades, $${deep.directionPerformance.long.pnl} P&L, ${deep.directionPerformance.long.winRate}% WR`);
+    lines.push(`  Short: ${deep.directionPerformance.short.trades} trades, $${deep.directionPerformance.short.pnl} P&L, ${deep.directionPerformance.short.winRate}% WR`);
+    lines.push('', 'STREAKS & TILT:');
+    lines.push(`  Max win streak: ${deep.streaks.maxWinStreak} | Max loss streak: ${deep.streaks.maxLossStreak}`);
+    lines.push(`  After 3+ loss streak: ${deep.tilt.tradesAfterLossStreak} trades, $${deep.tilt.pnl} P&L, ${deep.tilt.winRate}% WR`);
+  }
+
+  lines.push('', 'RECENT TRADES (last 15):');
+  groups.slice(-15).forEach((g: TradeGroup) => {
+    lines.push(`  ${g.symbol} ${g.direction.toUpperCase()}: ${g.pnl >= 0 ? '+' : ''}${g.pnlPercent.toFixed(2)}% ($${g.pnl.toFixed(2)}) | Held ${formatDuration(g.holdingTime)}`);
+  });
+
   return lines.join('\n');
 }
 

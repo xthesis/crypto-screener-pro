@@ -430,6 +430,8 @@ export default function TradeJournal() {
   const [stats, setStats] = useState<any>(null);
   const [analysis, setAnalysis] = useState('');
   const [coachData, setCoachData] = useState<any>(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [deepAnalytics, setDeepAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<TradeGroup | null>(null);
@@ -443,7 +445,10 @@ export default function TradeJournal() {
 
   const processFile = useCallback(async (text: string) => {
     setLoading(true);
+    setCoachLoading(true);
     setError('');
+    setCoachData(null);
+    setAnalysis('');
     try {
       const res = await fetch('/api/trade-analysis', {
         method: 'POST',
@@ -456,11 +461,13 @@ export default function TradeJournal() {
       setStats(data.stats || null);
       setAnalysis(data.analysis || '');
       setCoachData(data.coachData || null);
+      setDeepAnalytics(data.deepAnalytics || null);
       setHasData(true);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
+      setCoachLoading(false);
     }
   }, []);
 
@@ -530,7 +537,7 @@ export default function TradeJournal() {
   );
 
   const reset = () => {
-    setGroups([]); setStats(null); setAnalysis(''); setCoachData(null); setHasData(false); setError('');
+    setGroups([]); setStats(null); setAnalysis(''); setCoachData(null); setCoachLoading(false); setDeepAnalytics(null); setHasData(false); setError('');
     setFilterSymbol('all'); setFilterResult('all');
   };
 
@@ -683,29 +690,37 @@ export default function TradeJournal() {
 
         {/* Stats Cards */}
         {stats && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.6rem', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', marginBottom: '1.25rem' }}>
             {[
               { label: 'Round Trips', value: stats.totalTrades, color: '#f0f2f5' },
               { label: 'Win Rate', value: `${stats.winRate}%`, color: parseFloat(stats.winRate) >= 50 ? '#00c878' : '#ff4d4d' },
-              { label: 'Total P&L', value: `$${stats.totalPnl}`, color: stats.totalPnl >= 0 ? '#00c878' : '#ff4d4d' },
+              { label: 'Total P&L', value: `$${Number(stats.totalPnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: stats.totalPnl >= 0 ? '#00c878' : '#ff4d4d' },
               { label: 'Avg Win', value: `+${stats.avgWin}%`, color: '#00c878' },
               { label: 'Avg Loss', value: `${stats.avgLoss}%`, color: '#ff4d4d' },
               { label: 'R:R Ratio', value: stats.riskReward || 'N/A', color: '#4f8cff' },
               { label: 'Avg Hold', value: stats.avgHoldingTime, color: '#8b9099' },
-              { label: 'Total Fees', value: `$${stats.totalFees}`, color: '#f5a623' },
+              { label: 'Total Fees', value: `$${Number(stats.totalFees).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: '#f5a623' },
             ].map(s => (
-              <div key={s.label} className="stat-card">
-                <div className="label">{s.label}</div>
-                <div className="value" style={{ color: s.color }}>{s.value}</div>
+              <div key={s.label} style={{
+                background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+                borderRadius: 8, padding: '0.6rem 0.5rem', textAlign: 'center', overflow: 'hidden',
+              }}>
+                <div style={{ fontSize: '0.55rem', color: '#8b9099', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.3rem' }}>{s.label}</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 700, color: s.color, fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.value}</div>
               </div>
             ))}
           </div>
         )}
 
         {/* AI Coach Visual Dashboard */}
-        {(coachData || analysis) && (
+        {(coachData || analysis || coachLoading) && (
           <div style={{ marginBottom: '1.25rem' }}>
-            {coachData ? (
+            {coachLoading && !coachData && !analysis ? (
+              <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '1.2rem', marginBottom: '0.4rem' }}>🤖</div>
+                <div style={{ fontSize: '0.72rem', color: '#8b9099' }}>AI Coach analyzing your trades...</div>
+              </div>
+            ) : coachData ? (
               <>
                 {/* Grade + Scores Row */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
@@ -833,6 +848,127 @@ export default function TradeJournal() {
           </div>
         )}
 
+        {/* Deep Analytics */}
+        {deepAnalytics && hasData && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
+
+            {/* Holding Time Buckets */}
+            <div className="card" style={{ padding: '0.75rem 1rem' }}>
+              <div style={{ fontSize: '0.62rem', color: '#4f8cff', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>⏱ Hold Time vs Performance</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                {Object.entries(deepAnalytics.holdingTimeBuckets).map(([label, d]: [string, any]) => d.trades > 0 && (
+                  <div key={label}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', marginBottom: '0.15rem' }}>
+                      <span style={{ color: '#c9cdd3', fontWeight: 600 }}>{label}</span>
+                      <span style={{ color: '#8b9099' }}>{d.trades} trades · <span style={{ color: d.pnl >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>${d.pnl.toLocaleString()}</span> · {d.winRate}% WR</span>
+                    </div>
+                    <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', borderRadius: 3, width: `${Math.min(parseFloat(d.winRate), 100)}%`, background: parseFloat(d.winRate) >= 50 ? '#00c878' : '#ff4d4d' }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Session Performance */}
+            <div className="card" style={{ padding: '0.75rem 1rem' }}>
+              <div style={{ fontSize: '0.62rem', color: '#f5a623', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>🌍 Session Performance</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                {Object.entries(deepAnalytics.sessionPerformance).map(([label, d]: [string, any]) => d.trades > 0 && (
+                  <div key={label}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', marginBottom: '0.15rem' }}>
+                      <span style={{ color: '#c9cdd3', fontWeight: 600 }}>{label}</span>
+                      <span style={{ color: '#8b9099' }}>{d.trades} trades · <span style={{ color: d.pnl >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>${d.pnl.toLocaleString()}</span> · {d.winRate}% WR</span>
+                    </div>
+                    <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', borderRadius: 3, width: `${Math.min(parseFloat(d.winRate), 100)}%`, background: parseFloat(d.winRate) >= 50 ? '#00c878' : '#ff4d4d' }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Day of Week */}
+            <div className="card" style={{ padding: '0.75rem 1rem' }}>
+              <div style={{ fontSize: '0.62rem', color: '#00c878', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>📅 Day of Week</div>
+              <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'flex-end', height: 70 }}>
+                {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => {
+                  const d = deepAnalytics.dayPerformance[day];
+                  if (!d) return <div key={day} style={{ flex: 1, textAlign: 'center' }}><div style={{ fontSize: '0.52rem', color: '#545b66' }}>{day}</div></div>;
+                  const maxTrades = Math.max(...Object.values(deepAnalytics.dayPerformance).map((v: any) => v?.trades || 0));
+                  const h = maxTrades > 0 ? (d.trades / maxTrades) * 50 : 0;
+                  return (
+                    <div key={day} style={{ flex: 1, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      <div style={{ fontSize: '0.52rem', color: d.pnl >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 700, marginBottom: 2 }}>${Math.abs(d.pnl) >= 1000 ? (d.pnl/1000).toFixed(1)+'k' : d.pnl}</div>
+                      <div style={{ width: '80%', height: h, borderRadius: 2, background: d.pnl >= 0 ? 'rgba(0,200,120,0.4)' : 'rgba(255,77,77,0.4)', marginBottom: 2 }} />
+                      <div style={{ fontSize: '0.52rem', color: '#8b9099' }}>{day}</div>
+                      <div style={{ fontSize: '0.48rem', color: '#545b66' }}>{d.trades}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Long vs Short + Streaks + Tilt */}
+            <div className="card" style={{ padding: '0.75rem 1rem' }}>
+              <div style={{ fontSize: '0.62rem', color: '#ff4d4d', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>📊 Direction & Streaks</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                {/* Long vs Short */}
+                {deepAnalytics.directionPerformance && (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    {['long', 'short'].map(dir => {
+                      const d = deepAnalytics.directionPerformance[dir];
+                      if (!d || d.trades === 0) return null;
+                      return (
+                        <div key={dir} style={{ flex: 1, padding: '0.35rem 0.5rem', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                          <div style={{ fontSize: '0.58rem', fontWeight: 700, color: dir === 'long' ? '#00c878' : '#ff4d4d', textTransform: 'uppercase', marginBottom: 2 }}>{dir === 'long' ? '↑ Long' : '↓ Short'}</div>
+                          <div style={{ fontSize: '0.58rem', color: '#8b9099' }}>{d.trades} trades · {d.winRate}% WR · <span style={{ color: d.pnl >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 600 }}>${d.pnl.toLocaleString()}</span></div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* Streaks */}
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <div style={{ flex: 1, padding: '0.35rem 0.5rem', borderRadius: 6, background: 'rgba(0,200,120,0.04)', border: '1px solid rgba(0,200,120,0.08)' }}>
+                    <div style={{ fontSize: '0.55rem', color: '#8b9099' }}>Best streak</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 800, color: '#00c878' }}>{deepAnalytics.streaks.maxWinStreak}W</div>
+                  </div>
+                  <div style={{ flex: 1, padding: '0.35rem 0.5rem', borderRadius: 6, background: 'rgba(255,77,77,0.04)', border: '1px solid rgba(255,77,77,0.08)' }}>
+                    <div style={{ fontSize: '0.55rem', color: '#8b9099' }}>Worst streak</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 800, color: '#ff4d4d' }}>{deepAnalytics.streaks.maxLossStreak}L</div>
+                  </div>
+                  <div style={{ flex: 1, padding: '0.35rem 0.5rem', borderRadius: 6, background: deepAnalytics.tilt.pnl >= 0 ? 'rgba(0,200,120,0.04)' : 'rgba(255,77,77,0.04)', border: `1px solid ${deepAnalytics.tilt.pnl >= 0 ? 'rgba(0,200,120,0.08)' : 'rgba(255,77,77,0.08)'}` }}>
+                    <div style={{ fontSize: '0.55rem', color: '#8b9099' }}>Tilt trades</div>
+                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: deepAnalytics.tilt.pnl >= 0 ? '#00c878' : '#ff4d4d' }}>{deepAnalytics.tilt.tradesAfterLossStreak} trades</div>
+                    <div style={{ fontSize: '0.52rem', color: '#8b9099' }}>${deepAnalytics.tilt.pnl} · {deepAnalytics.tilt.winRate}% WR</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Monthly P&L */}
+            {deepAnalytics.monthlyCurve && deepAnalytics.monthlyCurve.length > 1 && (
+              <div className="card" style={{ padding: '0.75rem 1rem', gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: '0.62rem', color: '#4f8cff', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>📈 Monthly P&L</div>
+                <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'flex-end', height: 80 }}>
+                  {deepAnalytics.monthlyCurve.map((m: any) => {
+                    const maxAbs = Math.max(...deepAnalytics.monthlyCurve.map((v: any) => Math.abs(v.pnl)));
+                    const h = maxAbs > 0 ? (Math.abs(m.pnl) / maxAbs) * 60 : 0;
+                    return (
+                      <div key={m.month} style={{ flex: 1, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end' }}>
+                        <div style={{ fontSize: '0.5rem', color: m.pnl >= 0 ? '#00c878' : '#ff4d4d', fontWeight: 700, marginBottom: 2 }}>${Math.abs(m.pnl) >= 1000 ? (m.pnl/1000).toFixed(1)+'k' : m.pnl}</div>
+                        <div style={{ width: '70%', height: Math.max(h, 3), borderRadius: 2, background: m.pnl >= 0 ? 'rgba(0,200,120,0.5)' : 'rgba(255,77,77,0.5)', marginBottom: 2 }} />
+                        <div style={{ fontSize: '0.48rem', color: '#8b9099' }}>{m.month.substring(2)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Filters */}
         {hasData && groups.length > 0 && (
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -883,6 +1019,7 @@ export default function TradeJournal() {
                     <th style={{ textAlign: 'right' }}>Entry</th>
                     <th style={{ textAlign: 'right' }}>Exit</th>
                     <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => handleSort('holdingTime')}>Held<SortIcon field="holdingTime" /></th>
+                    <th style={{ textAlign: 'right' }}>R:R</th>
                     <th style={{ textAlign: 'center' }}>Chart</th>
                   </tr>
                 </thead>
@@ -940,6 +1077,14 @@ export default function TradeJournal() {
                       </td>
                       <td style={{ textAlign: 'right', fontSize: '0.72rem', color: '#8b9099' }}>
                         {formatDuration(g.holdingTime)}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        {(() => {
+                          const avgL = Math.abs(stats?.avgLoss || 1);
+                          const rr = avgL > 0 ? g.pnlPercent / avgL : 0;
+                          const color = rr >= 2 ? '#00c878' : rr >= 1 ? '#4f8cff' : rr >= 0 ? '#8b9099' : '#ff4d4d';
+                          return <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.68rem', fontWeight: 600, color }}>{rr >= 0 ? '+' : ''}{rr.toFixed(1)}R</span>;
+                        })()}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <span style={{ fontSize: '0.7rem', color: '#4f8cff' }}>📊</span>
